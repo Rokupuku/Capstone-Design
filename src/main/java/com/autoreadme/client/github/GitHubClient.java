@@ -14,7 +14,9 @@ public class GitHubClient {
 
     private final WebClient webClient;
 
-    @Value("${github.api.token}")
+    // 테스트/로컬에서 토큰이 미설정일 수 있으므로 기본값을 비워 둡니다.
+    // 실제 실행 시에는 API 호출 직전에 토큰 존재 여부를 검증하도록 처리합니다.
+    @Value("${github.api.token:}")
     private String githubToken;
 
     public GitHubClient(WebClient.Builder webClientBuilder) {
