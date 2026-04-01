@@ -11,9 +11,7 @@ const STAGES = [
   { stage: 'FINALIZING', label: '결과 정리' },
 ]
 
-function makeJobId() {
-  return `job_${Math.random().toString(16).slice(2, 10)}`
-}
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
 
 function clampInt(n, min, max) {
   return Math.max(min, Math.min(max, n))
@@ -68,7 +66,53 @@ export default function App() {
     setReadmeText('')
   }
 
-  function startMockJob() {
+  async function parseErrorMessage(res, fallbackMessage) {
+    try {
+      const data = await res.json()
+      return data?.error || fallbackMessage
+    } catch {
+      return fallbackMessage
+    }
+  }
+
+  function startPollingJobStatus(jobId) {
+    if (intervalRef.current) clearInterval(intervalRef.current)
+
+    intervalRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/analyze/${encodeURIComponent(jobId)}`)
+        if (!res.ok) {
+          const msg = await parseErrorMessage(res, '상태 조회에 실패했습니다.')
+          throw new Error(msg)
+        }
+
+        const data = await res.json()
+        setJob({
+          status: data.status ?? 'failed',
+          jobId: data.jobId ?? jobId,
+          stage: data.stage ?? null,
+          stageProgress: clampInt(data.stageProgress ?? 0, 0, 100),
+          error: data.error ?? null,
+          result: data.result ?? null,
+        })
+
+        if (data.status === 'done' || data.status === 'failed') {
+          if (intervalRef.current) clearInterval(intervalRef.current)
+          intervalRef.current = null
+        }
+      } catch (e) {
+        if (intervalRef.current) clearInterval(intervalRef.current)
+        intervalRef.current = null
+        setJob((prev) => ({
+          ...prev,
+          status: 'failed',
+          error: e?.message ?? '상태 조회 중 오류가 발생했습니다.',
+        }))
+      }
+    }, 1000)
+  }
+
+  async function startAnalyzeJob() {
     const trimmed = githubUrl.trim()
     if (!isProbablyGitHubRepoUrl(trimmed)) {
       setJob((prev) => ({
@@ -80,75 +124,50 @@ export default function App() {
     }
 
     if (intervalRef.current) clearInterval(intervalRef.current)
-
-    const jobId = makeJobId()
-    const stagePlan = [
-      { stage: 'VALIDATING_INPUT', ms: 1200 },
-      { stage: 'COLLECTING_FILES', ms: 2400 },
-      { stage: 'STATIC_ANALYSIS', ms: 3200 },
-      { stage: 'LLM_GENERATION', ms: 4200 },
-      { stage: 'FINALIZING', ms: 1600 },
-    ]
+    intervalRef.current = null
 
     setJob({
       status: 'running',
-      jobId,
-      stage: stagePlan[0].stage,
+      jobId: null,
+      stage: 'VALIDATING_INPUT',
       stageProgress: 0,
       error: null,
       result: null,
     })
 
-    let stageIdx = 0
-    const startedAt = Date.now()
-    const tickMs = 100
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          githubUrl: trimmed,
+        }),
+      })
 
-    intervalRef.current = setInterval(() => {
-      const now = Date.now()
-      const stage = stagePlan[stageIdx]
+      if (!res.ok) {
+        const msg = await parseErrorMessage(res, '분석 시작 요청에 실패했습니다.')
+        throw new Error(msg)
+      }
 
-      const stageElapsed =
-        now -
-        (startedAt +
-          stagePlan
-            .slice(0, stageIdx)
-            .reduce((acc, s) => acc + s.ms, 0))
-
-      const stageProgress = clampInt(Math.round((stageElapsed / stage.ms) * 100), 0, 100)
-
-      if (stageProgress >= 100) {
-        stageIdx += 1
-        if (stageIdx >= stagePlan.length) {
-          if (intervalRef.current) clearInterval(intervalRef.current)
-          intervalRef.current = null
-          setJob((prev) => ({
-            ...prev,
-            status: 'done',
-            stage: stagePlan[stagePlan.length - 1].stage,
-            stageProgress: 100,
-            result: {
-              markdown: `# 기술 문서(목업 결과)\n\n- 입력: ${trimmed}\n- 분석 범위: 프론트/백엔드 유기적 연결(예정)\n\n## 다음에 붙일 것\n- 정적 분석 그래프(JSON)\n- 엔드포인트/의존성 맵\n- LLM 문서 생성 결과`,
-              graph: { nodes: [], edges: [] },
-            },
-          }))
-          return
-        }
-
-        setJob((prev) => ({
-          ...prev,
-          stage: stagePlan[stageIdx].stage,
-          stageProgress: 0,
-          error: null,
-        }))
-        return
+      const data = await res.json()
+      const jobId = data?.jobId
+      if (!jobId) {
+        throw new Error('백엔드 응답에 jobId가 없습니다.')
       }
 
       setJob((prev) => ({
         ...prev,
-        stage: stage.stage,
-        stageProgress,
+        jobId,
+        status: 'running',
       }))
-    }, tickMs)
+      startPollingJobStatus(jobId)
+    } catch (e) {
+      setJob((prev) => ({
+        ...prev,
+        status: 'failed',
+        error: e?.message ?? '분석 시작 중 오류가 발생했습니다.',
+      }))
+    }
   }
 
   const canStart =
@@ -234,7 +253,7 @@ export default function App() {
                   autoComplete="off"
                 />
               </label>
-              <button className="btn btnPrimary" onClick={startMockJob} disabled={!canStart} type="button">
+              <button className="btn btnPrimary" onClick={startAnalyzeJob} disabled={!canStart} type="button">
                 분석 시작
               </button>
             </div>
@@ -302,9 +321,9 @@ export default function App() {
             </div>
 
             <div className="runningHint">
-              백엔드는 아직 엔드포인트가 없어서, 현재 화면은 “목업(jobId/진행률)”으로 동작합니다.
-              실제로 붙일 때는 <code>POST /api/analyze</code>로 시작하고, <code>GET /api/analyze/{'{jobId}'}</code> 를 폴링/대기해
-              이 UI 상태를 갱신하면 됩니다.
+              백엔드 API를 실제 호출 중입니다.
+              <code>POST /api/analyze</code>로 작업을 시작하고,
+              <code>GET /api/analyze/{'{jobId}'}</code>를 1초 간격으로 폴링해 상태를 갱신합니다.
             </div>
           </section>
         ) : null}
@@ -321,8 +340,8 @@ export default function App() {
               <div className="errorText">{job.error ?? '알 수 없는 오류'}</div>
             </div>
             <div className="actionsRow">
-              <button className="btn btnPrimary" onClick={startMockJob} type="button" disabled={!canStart}>
-                다시 시도(목업)
+              <button className="btn btnPrimary" onClick={startAnalyzeJob} type="button" disabled={!canStart}>
+                다시 시도
               </button>
               <button className="btn btnGhost" onClick={resetJob} type="button">
                 다른 URL 입력

@@ -1,6 +1,7 @@
 package com.autoreadme.client.github;
 
 import com.autoreadme.client.github.model.GitTreeResponse;
+import com.autoreadme.client.github.model.RepositoryResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -29,7 +30,7 @@ public class GitHubClient {
     public Mono<GitTreeResponse> getTree(String owner, String repo, String branch) {
         return webClient.get()
                 .uri("/repos/{owner}/{repo}/git/trees/{branch}?recursive=1", owner, repo, branch)
-                .header("Authorization", "Bearer " + githubToken)
+                .headers(headers -> addAuthHeader(headers, githubToken))
                 .retrieve()
                 .bodyToMono(GitTreeResponse.class)
                 .retryWhen(Retry.backoff(3, Duration.ofSeconds(1)));
@@ -38,10 +39,30 @@ public class GitHubClient {
     public Mono<String> getFileContent(String owner, String repo, String path) {
         return webClient.get()
                 .uri("/repos/{owner}/{repo}/contents/{path}", owner, repo, path)
-                .header("Authorization", "Bearer " + githubToken)
+                .headers(headers -> addAuthHeader(headers, githubToken))
                 .header("Accept", "application/vnd.github.v3.raw")
                 .retrieve()
                 .bodyToMono(String.class)
                 .retryWhen(Retry.backoff(3, Duration.ofSeconds(1)));
+    }
+
+    public Mono<String> getDefaultBranch(String owner, String repo) {
+        return webClient.get()
+                .uri("/repos/{owner}/{repo}", owner, repo)
+                .headers(headers -> addAuthHeader(headers, githubToken))
+                .retrieve()
+                .bodyToMono(RepositoryResponse.class)
+                .map(RepositoryResponse::defaultBranch)
+                .map(branch -> (branch == null || branch.isBlank()) ? "main" : branch);
+    }
+
+    public boolean hasGitHubToken() {
+        return githubToken != null && !githubToken.isBlank();
+    }
+
+    private static void addAuthHeader(org.springframework.http.HttpHeaders headers, String token) {
+        if (token != null && !token.isBlank()) {
+            headers.setBearerAuth(token);
+        }
     }
 }
