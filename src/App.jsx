@@ -12,6 +12,19 @@ const STAGES = [
 ]
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
+const USE_MOCK_API = (import.meta.env.VITE_USE_MOCK_API ?? 'false') === 'true'
+const POLLING_INTERVAL_MS = 1000
+
+function makeIdleJobState() {
+  return {
+    status: 'idle', // idle | running | done | failed
+    jobId: null,
+    stage: null,
+    stageProgress: 0,
+    error: null,
+    result: null,
+  }
+}
 
 function clampInt(n, min, max) {
   return Math.max(min, Math.min(max, n))
@@ -26,14 +39,7 @@ export default function App() {
   const [githubUrl, setGithubUrl] = useState('')
   const [readmeText, setReadmeText] = useState('')
   const domPurifyRef = useRef(null)
-  const [job, setJob] = useState({
-    status: 'idle', // idle | running | done | failed
-    jobId: null,
-    stage: null,
-    stageProgress: 0,
-    error: null,
-    result: null,
-  })
+  const [job, setJob] = useState(makeIdleJobState)
 
   const intervalRef = useRef(null)
 
@@ -52,17 +58,14 @@ export default function App() {
     }
   }, [])
 
-  function resetJob() {
+  function clearPolling() {
     if (intervalRef.current) clearInterval(intervalRef.current)
     intervalRef.current = null
-    setJob({
-      status: 'idle',
-      jobId: null,
-      stage: null,
-      stageProgress: 0,
-      error: null,
-      result: null,
-    })
+  }
+
+  function resetJob() {
+    clearPolling()
+    setJob(makeIdleJobState())
     setReadmeText('')
   }
 
@@ -76,7 +79,7 @@ export default function App() {
   }
 
   function startPollingJobStatus(jobId) {
-    if (intervalRef.current) clearInterval(intervalRef.current)
+    clearPolling()
 
     intervalRef.current = setInterval(async () => {
       try {
@@ -97,19 +100,81 @@ export default function App() {
         })
 
         if (data.status === 'done' || data.status === 'failed') {
-          if (intervalRef.current) clearInterval(intervalRef.current)
-          intervalRef.current = null
+          clearPolling()
         }
       } catch (e) {
-        if (intervalRef.current) clearInterval(intervalRef.current)
-        intervalRef.current = null
+        clearPolling()
         setJob((prev) => ({
           ...prev,
           status: 'failed',
           error: e?.message ?? '상태 조회 중 오류가 발생했습니다.',
         }))
       }
-    }, 1000)
+    }, POLLING_INTERVAL_MS)
+  }
+
+  function startMockJob(trimmedUrl) {
+    clearPolling()
+
+    const jobId = `mock_${Math.random().toString(16).slice(2, 10)}`
+    const stagePlan = [
+      { stage: 'VALIDATING_INPUT', ms: 800 },
+      { stage: 'COLLECTING_FILES', ms: 1600 },
+      { stage: 'STATIC_ANALYSIS', ms: 2000 },
+      { stage: 'LLM_GENERATION', ms: 2600 },
+      { stage: 'FINALIZING', ms: 900 },
+    ]
+
+    setJob({
+      status: 'running',
+      jobId,
+      stage: stagePlan[0].stage,
+      stageProgress: 0,
+      error: null,
+      result: null,
+    })
+
+    let stageIdx = 0
+    const startedAt = Date.now()
+
+    intervalRef.current = setInterval(() => {
+      const now = Date.now()
+      const elapsedBeforeCurrent = stagePlan.slice(0, stageIdx).reduce((acc, s) => acc + s.ms, 0)
+      const current = stagePlan[stageIdx]
+      const stageElapsed = now - (startedAt + elapsedBeforeCurrent)
+      const stageProgress = clampInt(Math.round((stageElapsed / current.ms) * 100), 0, 100)
+
+      if (stageProgress >= 100) {
+        stageIdx += 1
+        if (stageIdx >= stagePlan.length) {
+          clearPolling()
+          setJob((prev) => ({
+            ...prev,
+            status: 'done',
+            stage: 'FINALIZING',
+            stageProgress: 100,
+            result: {
+              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- \`VITE_USE_MOCK_API=false\` 로 변경 후 실제 API 연동`,
+              graph: { nodes: [], edges: [] },
+            },
+          }))
+          return
+        }
+
+        setJob((prev) => ({
+          ...prev,
+          stage: stagePlan[stageIdx].stage,
+          stageProgress: 0,
+        }))
+        return
+      }
+
+      setJob((prev) => ({
+        ...prev,
+        stage: current.stage,
+        stageProgress,
+      }))
+    }, 100)
   }
 
   async function startAnalyzeJob() {
@@ -123,8 +188,12 @@ export default function App() {
       return
     }
 
-    if (intervalRef.current) clearInterval(intervalRef.current)
-    intervalRef.current = null
+    if (USE_MOCK_API) {
+      startMockJob(trimmed)
+      return
+    }
+
+    clearPolling()
 
     setJob({
       status: 'running',
@@ -321,9 +390,17 @@ export default function App() {
             </div>
 
             <div className="runningHint">
-              백엔드 API를 실제 호출 중입니다.
-              <code>POST /api/analyze</code>로 작업을 시작하고,
-              <code>GET /api/analyze/{'{jobId}'}</code>를 1초 간격으로 폴링해 상태를 갱신합니다.
+              {USE_MOCK_API ? (
+                <>
+                  현재 목업 모드입니다. 백엔드 없이 단계 진행/완료 화면을 시뮬레이션합니다.
+                </>
+              ) : (
+                <>
+                  백엔드 API를 실제 호출 중입니다.
+                  <code>POST /api/analyze</code>로 작업을 시작하고,
+                  <code>GET /api/analyze/{'{jobId}'}</code>를 1초 간격으로 폴링해 상태를 갱신합니다.
+                </>
+              )}
             </div>
           </section>
         ) : null}
@@ -399,7 +476,6 @@ export default function App() {
                     className="btn btnPrimary"
                     onClick={() => {
                       resetJob()
-                      setGithubUrl(githubUrl)
                     }}
                     type="button"
                   >
