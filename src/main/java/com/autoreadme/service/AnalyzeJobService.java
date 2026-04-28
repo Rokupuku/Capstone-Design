@@ -36,15 +36,29 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class AnalyzeJobService {
 
+    public enum AnalysisStage {
+        VALIDATING("입력값 검증 중", 10),
+        COLLECTING("파일 수집 중", 40),
+        ANALYZING("코드 분석 중", 70),
+        GENERATING("문서 생성 중", 90),
+        COMPLETED("분석 완료", 100),
+        FAILED("분석 실패", 0);
+
+        private final String label;
+        private final int defaultProgress;
+
+        AnalysisStage(String label, int defaultProgress) {
+            this.label = label;
+            this.defaultProgress = defaultProgress;
+        }
+
+        public String getLabel() { return label; }
+        public int getDefaultProgress() { return defaultProgress; }
+    }
+
     private static final String STATUS_RUNNING = "running";
     private static final String STATUS_DONE = "done";
     private static final String STATUS_FAILED = "failed";
-
-    private static final String STAGE_VALIDATING = "VALIDATING_INPUT";
-    private static final String STAGE_COLLECTING = "COLLECTING_FILES";
-    private static final String STAGE_STATIC_ANALYSIS = "STATIC_ANALYSIS";
-    private static final String STAGE_LLM = "LLM_GENERATION";
-    private static final String STAGE_FINALIZING = "FINALIZING";
 
     private static final Duration GH_BRANCH_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration GH_COLLECT_TIMEOUT = Duration.ofMinutes(2);
@@ -62,7 +76,7 @@ public class AnalyzeJobService {
         ParsedRepo parsedRepo = parseGithubRepoUrl(request.githubUrl());
         String jobId = "job_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 
-        JobState state = JobState.running(jobId, STAGE_VALIDATING, 0);
+        JobState state = JobState.running(jobId, AnalysisStage.VALIDATING);
         jobs.put(jobId, state);
 
         executor.submit(() -> runJob(jobId, parsedRepo, normalizeBranch(request.branch())));
@@ -78,7 +92,7 @@ public class AnalyzeJobService {
         return new AnalyzeStatusResponse(
                 state.status,
                 state.jobId,
-                state.stage,
+                state.stage.name(),
                 state.stageProgress,
                 state.error,
                 state.result
@@ -87,7 +101,8 @@ public class AnalyzeJobService {
 
     private void runJob(String jobId, ParsedRepo parsedRepo, String requestedBranch) {
         try {
-            updateStage(jobId, STAGE_VALIDATING, 25, null, null);
+            // 1. Validating
+            updateStage(jobId, AnalysisStage.VALIDATING, 50, null);
             if (!gitHubClient.hasGitHubToken()) {
                 throw new IllegalArgumentException("github.api.token 설정이 필요합니다.");
             }
@@ -100,52 +115,47 @@ public class AnalyzeJobService {
             if (branch == null || branch.isBlank()) {
                 branch = "main";
             }
-            updateStage(jobId, STAGE_VALIDATING, 100, null, null);
+            updateStage(jobId, AnalysisStage.VALIDATING, 100, null);
 
-            updateStage(jobId, STAGE_COLLECTING, 10, null, null);
+            // 2. Collecting
+            updateStage(jobId, AnalysisStage.COLLECTING, 20, null);
             List<GitHubFileResponse> files = fileCollectionService
                     .collectTargetFiles(parsedRepo.owner(), parsedRepo.repo(), branch)
                     .collectList()
                     .block(GH_COLLECT_TIMEOUT);
-            if (files == null) {
-                files = List.of();
-            }
-            updateStage(jobId, STAGE_COLLECTING, 100, null, null);
+            if (files == null) files = List.of();
+            updateStage(jobId, AnalysisStage.COLLECTING, 100, null);
 
-            updateStage(jobId, STAGE_STATIC_ANALYSIS, 30, null, null);
+            // 3. Analyzing
+            updateStage(jobId, AnalysisStage.ANALYZING, 30, null);
             List<DetectedStack> detectedStacks = stackDetector.detectStacks(Flux.fromIterable(files))
                     .block(Duration.ofSeconds(30));
             List<EndpointInfo> endpoints = codeProfiler.extractEndpoints(files);
             List<EntityInfo> entities = codeProfiler.extractEntities(files);
             
             AnalysisSummary summary = summarize(files, detectedStacks, endpoints, entities);
-            
-            // LLM 전송용 컨텍스트 미리 구성 (나중에 LLM 단계에서 사용)
-            String technicalContext = contextBuilder.buildContext(
-                    detectedStacks, 
-                    endpoints, 
-                    entities, 
-                    contextBuilder.selectCoreFiles(files)
-            );
-            log.info("Technical context built for jobId={}. Length={}", jobId, technicalContext.length());
-            
-            updateStage(jobId, STAGE_STATIC_ANALYSIS, 100, null, null);
+            updateStage(jobId, AnalysisStage.ANALYZING, 100, null);
 
-            updateStage(jobId, STAGE_LLM, 70, null, null);
+            // 4. Generating (Preview)
+            updateStage(jobId, AnalysisStage.GENERATING, 50, null);
             AnalyzeResult result = buildResultMarkdown(parsedRepo, branch, summary);
-            updateStage(jobId, STAGE_LLM, 100, null, null);
+            updateStage(jobId, AnalysisStage.GENERATING, 100, null);
 
-            jobs.computeIfPresent(jobId, (id, prev) -> prev.done(STAGE_FINALIZING, 100, result));
-            log.info("Analyze job completed. jobId={}, repo={}/{}", jobId, parsedRepo.owner(), parsedRepo.repo());
+            // 5. Finalizing
+            jobs.computeIfPresent(jobId, (id, prev) -> prev.done(result));
+            log.info("Analyze job completed successfully. jobId={}", jobId);
+
         } catch (Exception e) {
-            log.error("Analyze job failed. jobId={}, reason={}", jobId, e.getMessage(), e);
-            jobs.computeIfPresent(jobId, (id, prev) -> prev.failed(prev.stage, prev.stageProgress, userFacingError(e)));
+            log.error("Analyze job failed. jobId={}, reason={}", jobId, e.getMessage());
+            jobs.computeIfPresent(jobId, (id, prev) -> prev.failed(userFacingError(e)));
         }
     }
 
-    private void updateStage(String jobId, String stage, int progress, String error, AnalyzeResult result) {
-        jobs.computeIfPresent(jobId, (id, prev) -> prev.runningStage(stage, progress, error, result));
+    private void updateStage(String jobId, AnalysisStage stage, int subProgress, AnalyzeResult result) {
+        // subProgress는 해당 단계 내에서의 진행률(0~100)
+        jobs.computeIfPresent(jobId, (id, prev) -> prev.runningStage(stage, subProgress, result));
     }
+
 
     private AnalysisSummary summarize(
             List<GitHubFileResponse> files, 
@@ -314,12 +324,12 @@ public class AnalyzeJobService {
     private static class JobState {
         private final String status;
         private final String jobId;
-        private final String stage;
+        private final AnalysisStage stage;
         private final int stageProgress;
         private final String error;
         private final AnalyzeResult result;
 
-        private JobState(String status, String jobId, String stage, int stageProgress, String error, AnalyzeResult result) {
+        private JobState(String status, String jobId, AnalysisStage stage, int stageProgress, String error, AnalyzeResult result) {
             this.status = status;
             this.jobId = jobId;
             this.stage = stage;
@@ -328,20 +338,22 @@ public class AnalyzeJobService {
             this.result = result;
         }
 
-        static JobState running(String jobId, String stage, int progress) {
-            return new JobState(STATUS_RUNNING, jobId, stage, progress, null, null);
+        static JobState running(String jobId, AnalysisStage stage) {
+            return new JobState(STATUS_RUNNING, jobId, stage, 0, null, null);
         }
 
-        JobState runningStage(String nextStage, int progress, String nextError, AnalyzeResult nextResult) {
-            return new JobState(STATUS_RUNNING, this.jobId, nextStage, progress, nextError, nextResult);
+        JobState runningStage(AnalysisStage nextStage, int subProgress, AnalyzeResult nextResult) {
+            // subProgress (0~100)를 기반으로 전체 진행률 계산 (간소화)
+            int totalProgress = nextStage.getDefaultProgress();
+            return new JobState(STATUS_RUNNING, this.jobId, nextStage, totalProgress, null, nextResult);
         }
 
-        JobState done(String finalStage, int progress, AnalyzeResult finalResult) {
-            return new JobState(STATUS_DONE, this.jobId, finalStage, progress, null, finalResult);
+        JobState done(AnalyzeResult finalResult) {
+            return new JobState(STATUS_DONE, this.jobId, AnalysisStage.COMPLETED, 100, null, finalResult);
         }
 
-        JobState failed(String currentStage, int progress, String failureError) {
-            return new JobState(STATUS_FAILED, this.jobId, currentStage, progress, failureError, null);
+        JobState failed(String failureError) {
+            return new JobState(STATUS_FAILED, this.jobId, AnalysisStage.FAILED, 0, failureError, null);
         }
     }
 }
