@@ -5,6 +5,8 @@ import com.autoreadme.api.dto.AnalyzeResult;
 import com.autoreadme.api.dto.AnalyzeStatusResponse;
 import com.autoreadme.api.dto.AnalyzeStartRequest;
 import com.autoreadme.api.dto.DetectedStack;
+import com.autoreadme.api.dto.EndpointInfo;
+import com.autoreadme.api.dto.EntityInfo;
 import com.autoreadme.api.dto.GraphEdge;
 import com.autoreadme.api.dto.GraphNode;
 import com.autoreadme.client.github.GitHubClient;
@@ -50,6 +52,8 @@ public class AnalyzeJobService {
     private final FileCollectionService fileCollectionService;
     private final GitHubClient gitHubClient;
     private final StackDetector stackDetector;
+    private final CodeProfiler codeProfiler;
+    private final ContextBuilder contextBuilder;
 
     private final Map<String, JobState> jobs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -111,7 +115,20 @@ public class AnalyzeJobService {
             updateStage(jobId, STAGE_STATIC_ANALYSIS, 30, null, null);
             List<DetectedStack> detectedStacks = stackDetector.detectStacks(Flux.fromIterable(files))
                     .block(Duration.ofSeconds(30));
-            AnalysisSummary summary = summarize(files, detectedStacks);
+            List<EndpointInfo> endpoints = codeProfiler.extractEndpoints(files);
+            List<EntityInfo> entities = codeProfiler.extractEntities(files);
+            
+            AnalysisSummary summary = summarize(files, detectedStacks, endpoints, entities);
+            
+            // LLM 전송용 컨텍스트 미리 구성 (나중에 LLM 단계에서 사용)
+            String technicalContext = contextBuilder.buildContext(
+                    detectedStacks, 
+                    endpoints, 
+                    entities, 
+                    contextBuilder.selectCoreFiles(files)
+            );
+            log.info("Technical context built for jobId={}. Length={}", jobId, technicalContext.length());
+            
             updateStage(jobId, STAGE_STATIC_ANALYSIS, 100, null, null);
 
             updateStage(jobId, STAGE_LLM, 70, null, null);
@@ -130,7 +147,12 @@ public class AnalyzeJobService {
         jobs.computeIfPresent(jobId, (id, prev) -> prev.runningStage(stage, progress, error, result));
     }
 
-    private AnalysisSummary summarize(List<GitHubFileResponse> files, List<DetectedStack> detectedStacks) {
+    private AnalysisSummary summarize(
+            List<GitHubFileResponse> files, 
+            List<DetectedStack> detectedStacks,
+            List<EndpointInfo> endpoints,
+            List<EntityInfo> entities
+    ) {
         Map<String, Long> extCount = files.stream()
                 .collect(Collectors.groupingBy(
                         f -> extensionOf(f.path()),
@@ -154,17 +176,17 @@ public class AnalyzeJobService {
             edges.add(new GraphEdge("repo", nodeId, "contains"));
         }
 
-        return new AnalysisSummary(files.size(), topExt, nodes, edges, detectedStacks);
+        return new AnalysisSummary(files.size(), topExt, nodes, edges, detectedStacks, endpoints, entities);
     }
 
     private AnalyzeResult buildResultMarkdown(ParsedRepo repo, String branch, AnalysisSummary summary) {
         StringBuilder markdown = new StringBuilder();
-        markdown.append("# 기술 문서(백엔드 1차 결과)\n\n")
+        markdown.append("# 기술 문서(백엔드 분석 결과)\n\n")
                 .append("- 저장소: `").append(repo.owner()).append("/").append(repo.repo()).append("`\n")
                 .append("- 브랜치: `").append(branch).append("`\n")
                 .append("- 수집 파일 수: ").append(summary.totalFiles()).append("개\n\n");
 
-        markdown.append("## 기술 스택 (Detected Stacks)\n");
+        markdown.append("## 1. 기술 스택 (Detected Stacks)\n");
         if (summary.detectedStacks() == null || summary.detectedStacks().isEmpty()) {
             markdown.append("- 식별된 기술 스택이 없습니다.\n");
         } else {
@@ -175,8 +197,28 @@ public class AnalyzeJobService {
         }
         markdown.append("\n");
 
-        markdown.append("## 파일 유형 분포 (Top ").append(summary.topExtensions().size()).append(")\n");
+        markdown.append("## 2. API 엔드포인트 (Endpoints)\n");
+        if (summary.endpoints().isEmpty()) {
+            markdown.append("- 식별된 API 엔드포인트가 없습니다.\n");
+        } else {
+            summary.endpoints().forEach(e -> 
+                markdown.append("- `").append(e.getMethod()).append("` ").append(e.getUrl()).append("\n")
+            );
+        }
+        markdown.append("\n");
 
+        markdown.append("## 3. 데이터베이스 엔티티 (Entities)\n");
+        if (summary.entities().isEmpty()) {
+            markdown.append("- 식별된 엔티티가 없습니다.\n");
+        } else {
+            summary.entities().forEach(en -> 
+                markdown.append("- **").append(en.getName()).append("**: ")
+                        .append(String.join(", ", en.getFields())).append("\n")
+            );
+        }
+        markdown.append("\n");
+
+        markdown.append("## 4. 파일 유형 분포 (Top ").append(summary.topExtensions().size()).append(")\n");
         if (summary.topExtensions().isEmpty()) {
             markdown.append("- 분석 가능한 대상 파일이 없습니다.\n");
         } else {
@@ -186,8 +228,7 @@ public class AnalyzeJobService {
         }
 
         markdown.append("\n## 다음 단계\n")
-                .append("- 정적 분석(AST/의존성/엔드포인트) 결과를 이 문서에 자동 병합\n")
-                .append("- LLM 생성 문서를 도메인 섹션(아키텍처/실행방법/API)으로 확장\n")
+                .append("- LLM 생성 문서를 도메인 섹션(아키텍처/실행방법/API)으로 확장 (9-11주차 예정)\n")
                 .append("- 연결 그래프 노드/엣지 의미를 실제 코드 구조 기준으로 정교화\n");
 
         return new AnalyzeResult(markdown.toString(), new AnalyzeGraph(summary.nodes(), summary.edges()));
@@ -265,7 +306,9 @@ public class AnalyzeJobService {
             List<Map.Entry<String, Long>> topExtensions,
             List<GraphNode> nodes,
             List<GraphEdge> edges,
-            List<DetectedStack> detectedStacks
+            List<DetectedStack> detectedStacks,
+            List<EndpointInfo> endpoints,
+            List<EntityInfo> entities
     ) {}
 
     private static class JobState {
