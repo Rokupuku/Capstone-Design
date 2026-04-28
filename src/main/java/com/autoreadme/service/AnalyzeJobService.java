@@ -4,6 +4,7 @@ import com.autoreadme.api.dto.AnalyzeGraph;
 import com.autoreadme.api.dto.AnalyzeResult;
 import com.autoreadme.api.dto.AnalyzeStatusResponse;
 import com.autoreadme.api.dto.AnalyzeStartRequest;
+import com.autoreadme.api.dto.DetectedStack;
 import com.autoreadme.api.dto.GraphEdge;
 import com.autoreadme.api.dto.GraphNode;
 import com.autoreadme.client.github.GitHubClient;
@@ -11,6 +12,7 @@ import com.autoreadme.client.github.model.GitHubFileResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import reactor.core.publisher.Flux;
 
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
@@ -47,6 +49,7 @@ public class AnalyzeJobService {
 
     private final FileCollectionService fileCollectionService;
     private final GitHubClient gitHubClient;
+    private final StackDetector stackDetector;
 
     private final Map<String, JobState> jobs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -106,7 +109,9 @@ public class AnalyzeJobService {
             updateStage(jobId, STAGE_COLLECTING, 100, null, null);
 
             updateStage(jobId, STAGE_STATIC_ANALYSIS, 30, null, null);
-            AnalysisSummary summary = summarize(files);
+            List<DetectedStack> detectedStacks = stackDetector.detectStacks(Flux.fromIterable(files))
+                    .block(Duration.ofSeconds(30));
+            AnalysisSummary summary = summarize(files, detectedStacks);
             updateStage(jobId, STAGE_STATIC_ANALYSIS, 100, null, null);
 
             updateStage(jobId, STAGE_LLM, 70, null, null);
@@ -125,7 +130,7 @@ public class AnalyzeJobService {
         jobs.computeIfPresent(jobId, (id, prev) -> prev.runningStage(stage, progress, error, result));
     }
 
-    private AnalysisSummary summarize(List<GitHubFileResponse> files) {
+    private AnalysisSummary summarize(List<GitHubFileResponse> files, List<DetectedStack> detectedStacks) {
         Map<String, Long> extCount = files.stream()
                 .collect(Collectors.groupingBy(
                         f -> extensionOf(f.path()),
@@ -149,7 +154,7 @@ public class AnalyzeJobService {
             edges.add(new GraphEdge("repo", nodeId, "contains"));
         }
 
-        return new AnalysisSummary(files.size(), topExt, nodes, edges);
+        return new AnalysisSummary(files.size(), topExt, nodes, edges, detectedStacks);
     }
 
     private AnalyzeResult buildResultMarkdown(ParsedRepo repo, String branch, AnalysisSummary summary) {
@@ -157,8 +162,20 @@ public class AnalyzeJobService {
         markdown.append("# 기술 문서(백엔드 1차 결과)\n\n")
                 .append("- 저장소: `").append(repo.owner()).append("/").append(repo.repo()).append("`\n")
                 .append("- 브랜치: `").append(branch).append("`\n")
-                .append("- 수집 파일 수: ").append(summary.totalFiles()).append("개\n\n")
-                .append("## 파일 유형 분포 (Top ").append(summary.topExtensions().size()).append(")\n");
+                .append("- 수집 파일 수: ").append(summary.totalFiles()).append("개\n\n");
+
+        markdown.append("## 기술 스택 (Detected Stacks)\n");
+        if (summary.detectedStacks() == null || summary.detectedStacks().isEmpty()) {
+            markdown.append("- 식별된 기술 스택이 없습니다.\n");
+        } else {
+            summary.detectedStacks().forEach(stack -> 
+                markdown.append("- **").append(stack.getStack().getDisplayName()).append("** (")
+                        .append(stack.getCategory()).append(")\n")
+            );
+        }
+        markdown.append("\n");
+
+        markdown.append("## 파일 유형 분포 (Top ").append(summary.topExtensions().size()).append(")\n");
 
         if (summary.topExtensions().isEmpty()) {
             markdown.append("- 분석 가능한 대상 파일이 없습니다.\n");
@@ -247,7 +264,8 @@ public class AnalyzeJobService {
             int totalFiles,
             List<Map.Entry<String, Long>> topExtensions,
             List<GraphNode> nodes,
-            List<GraphEdge> edges
+            List<GraphEdge> edges,
+            List<DetectedStack> detectedStacks
     ) {}
 
     private static class JobState {
