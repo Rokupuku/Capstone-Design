@@ -11,9 +11,42 @@ const STAGES = [
   { stage: 'FINALIZING', label: '결과 정리' },
 ]
 
+/** 임시: 단계별 UI 확인용 — true면 GitHub 형식이 아니어도 URL만 있으면 분석 시작 가능 */
+const RELAX_GITHUB_URL_FOR_STAGE_PREVIEW = true
+/** 임시: 주소창 쿼리로 진행 화면 단계를 바로 표시 (?previewStage=STATIC_ANALYSIS&previewUrl=https%3A%2F%2Fexample.com) */
+const PREVIEW_STAGE_QUERY = 'previewStage'
+const PREVIEW_URL_QUERY = 'previewUrl'
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
-const USE_MOCK_API = (import.meta.env.VITE_USE_MOCK_API ?? 'false') === 'true'
+const MOCK_FLAG = import.meta.env.VITE_USE_MOCK_API
+/** 명시 true/false가 없으면 개발 서버에서는 목업(백엔드 없이 동작), 프로덕션 빌드에서는 실 API */
+const USE_MOCK_API =
+  MOCK_FLAG === 'true' ? true : MOCK_FLAG === 'false' ? false : Boolean(import.meta.env.DEV)
 const POLLING_INTERVAL_MS = 1000
+
+function normalizeFetchError(err, fallback) {
+  const raw = typeof err?.message === 'string' ? err.message.trim() : ''
+  if (
+    /^load failed$/i.test(raw) ||
+    /^failed to fetch$/i.test(raw) ||
+    /networkerror/i.test(raw) ||
+    /network request failed/i.test(raw)
+  ) {
+    return `백엔드에 연결할 수 없습니다. (${API_BASE_URL}) 서버 실행 여부를 확인하거나, 목업을 쓰려면 개발 서버를 그대로 두거나 .env에 VITE_USE_MOCK_API=true 를 설정하세요.`
+  }
+  return raw || fallback
+}
+const COLOR_SCHEME_STORAGE_KEY = 'autoreadme-color-scheme'
+
+function readStoredColorScheme() {
+  try {
+    const v = localStorage.getItem(COLOR_SCHEME_STORAGE_KEY)
+    if (v === 'light' || v === 'dark') return v
+  } catch {
+    /* ignore */
+  }
+  return 'dark'
+}
 
 function makeIdleJobState() {
   return {
@@ -35,10 +68,36 @@ function isProbablyGitHubRepoUrl(value) {
   return v.startsWith('https://github.com/') || v.startsWith('http://github.com/')
 }
 
+function isAcceptableAnalyzeUrl(value) {
+  const v = value.trim()
+  if (!v) return false
+  if (RELAX_GITHUB_URL_FOR_STAGE_PREVIEW) {
+    return /^https?:\/\//i.test(v)
+  }
+  return isProbablyGitHubRepoUrl(value)
+}
+
+function readPreviewStageFromUrl() {
+  try {
+    const params = new URLSearchParams(window.location.search)
+    const stage = params.get(PREVIEW_STAGE_QUERY)
+    if (!stage || !STAGES.some((s) => s.stage === stage)) return null
+    const previewUrl = params.get(PREVIEW_URL_QUERY)?.trim()
+    return {
+      stage,
+      previewUrl: previewUrl && /^https?:\/\//i.test(previewUrl) ? previewUrl : 'https://github.com/preview/preview',
+      progress: clampInt(Number.parseInt(params.get('previewProgress') ?? '42', 10), 0, 100),
+    }
+  } catch {
+    return null
+  }
+}
+
 export default function App() {
   const [githubUrl, setGithubUrl] = useState('')
   const [readmeText, setReadmeText] = useState('')
   const domPurifyRef = useRef(null)
+  const [colorScheme, setColorScheme] = useState(readStoredColorScheme)
   const [job, setJob] = useState(makeIdleJobState)
 
   const intervalRef = useRef(null)
@@ -57,6 +116,31 @@ export default function App() {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (!RELAX_GITHUB_URL_FOR_STAGE_PREVIEW) return
+    const preview = readPreviewStageFromUrl()
+    if (!preview) return
+    setGithubUrl(preview.previewUrl)
+    setJob({
+      status: 'running',
+      jobId: `preview_${preview.stage}`,
+      stage: preview.stage,
+      stageProgress: preview.progress,
+      error: null,
+      result: null,
+    })
+  }, [])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.setAttribute('data-theme', colorScheme)
+    try {
+      localStorage.setItem(COLOR_SCHEME_STORAGE_KEY, colorScheme)
+    } catch {
+      /* ignore */
+    }
+  }, [colorScheme])
 
   function clearPolling() {
     if (intervalRef.current) clearInterval(intervalRef.current)
@@ -107,7 +191,7 @@ export default function App() {
         setJob((prev) => ({
           ...prev,
           status: 'failed',
-          error: e?.message ?? '상태 조회 중 오류가 발생했습니다.',
+          error: normalizeFetchError(e, '상태 조회 중 오류가 발생했습니다.'),
         }))
       }
     }, POLLING_INTERVAL_MS)
@@ -154,7 +238,7 @@ export default function App() {
             stage: 'FINALIZING',
             stageProgress: 100,
             result: {
-              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- \`VITE_USE_MOCK_API=false\` 로 변경 후 실제 API 연동`,
+              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- 실 API 연동: 개발에서 \`VITE_USE_MOCK_API=false\` 를 명시하거나 프로덕션 빌드로 실행`,
               graph: { nodes: [], edges: [] },
             },
           }))
@@ -179,11 +263,13 @@ export default function App() {
 
   async function startAnalyzeJob() {
     const trimmed = githubUrl.trim()
-    if (!isProbablyGitHubRepoUrl(trimmed)) {
+    if (!isAcceptableAnalyzeUrl(trimmed)) {
       setJob((prev) => ({
         ...prev,
         status: 'failed',
-        error: 'GitHub 저장소 URL을 확인해주세요. 예: https://github.com/{owner}/{repo}',
+        error: RELAX_GITHUB_URL_FOR_STAGE_PREVIEW
+          ? 'http(s):// 로 시작하는 URL을 입력해주세요.'
+          : 'GitHub 저장소 URL을 확인해주세요. 예: https://github.com/{owner}/{repo}',
       }))
       return
     }
@@ -234,13 +320,12 @@ export default function App() {
       setJob((prev) => ({
         ...prev,
         status: 'failed',
-        error: e?.message ?? '분석 시작 중 오류가 발생했습니다.',
+        error: normalizeFetchError(e, '분석 시작 중 오류가 발생했습니다.'),
       }))
     }
   }
 
-  const canStart =
-    githubUrl.trim().length > 0 && isProbablyGitHubRepoUrl(githubUrl) && job.status !== 'running'
+  const canStart = isAcceptableAnalyzeUrl(githubUrl) && job.status !== 'running'
 
   useEffect(() => {
     if (job.status === 'done' && job.result?.markdown) {
@@ -288,18 +373,32 @@ export default function App() {
   return (
     <div className="appShell">
       <header className="appHeader">
-        <div className="brand">
-          <div className="logoMark" aria-hidden="true" />
-          <div>
-            <div className="brandName">AutoReadMe</div>
-            <div className="brandSub">정적 코드 분석 + LLM 문서 생성</div>
+        <div className="appHeaderBar">
+          <div className="themeToggle" role="group" aria-label="화면 테마">
+            <button
+              type="button"
+              className={`themeToggleBtn ${colorScheme === 'light' ? 'themeToggleBtnActive' : ''}`}
+              onClick={() => setColorScheme('light')}
+              aria-pressed={colorScheme === 'light'}
+            >
+              라이트
+            </button>
+            <button
+              type="button"
+              className={`themeToggleBtn ${colorScheme === 'dark' ? 'themeToggleBtnActive' : ''}`}
+              onClick={() => setColorScheme('dark')}
+              aria-pressed={colorScheme === 'dark'}
+            >
+              다크
+            </button>
           </div>
+          {job.status !== 'idle' ? (
+            <button className="btn btnGhost" onClick={resetJob} type="button">
+              초기화
+            </button>
+          ) : null}
         </div>
-        {job.status !== 'idle' ? (
-          <button className="btn btnGhost" onClick={resetJob} type="button">
-            초기화
-          </button>
-        ) : null}
+        <h1 className="appTitleMark">AutoReadMe</h1>
       </header>
 
       <main className="appMain">
