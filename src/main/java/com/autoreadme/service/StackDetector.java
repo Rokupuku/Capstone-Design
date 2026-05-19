@@ -69,6 +69,13 @@ public class StackDetector {
                 }
             }
 
+            // Python 기반 식별
+            if (path.endsWith("requirements.txt") || path.endsWith("pyproject.toml")) {
+                detected.add(createStack(TechStack.PYTHON, "Language"));
+                if (content.contains("django")) detected.add(createStack(TechStack.DJANGO, "Framework"));
+                if (content.contains("fastapi")) detected.add(createStack(TechStack.FASTAPI, "Framework"));
+            }
+
             // 인프라 식별
             if (path.contains("dockerfile") || path.contains("docker-compose")) {
                 detected.add(createStack(TechStack.DOCKER, "Infrastructure"));

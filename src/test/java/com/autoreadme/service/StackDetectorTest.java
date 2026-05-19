@@ -49,17 +49,17 @@ class StackDetectorTest {
     }
 
     @Test
-    @DisplayName("복합 인프라 환경 기술 스택 식별 테스트")
-    void detectInfra() {
-        GitHubFileResponse dockerfile = new GitHubFileResponse("Dockerfile", "FROM openjdk:17");
-        GitHubFileResponse workflow = new GitHubFileResponse(".github/workflows/ci.yml", "name: CI");
+    @DisplayName("Python 프로젝트 기술 스택 식별 테스트")
+    void detectPython() {
+        GitHubFileResponse reqs = new GitHubFileResponse("requirements.txt", 
+            "fastapi==0.100.0\nuvicorn\nsqlalchemy");
         
-        Flux<GitHubFileResponse> files = Flux.just(dockerfile, workflow);
+        Flux<GitHubFileResponse> files = Flux.just(reqs);
 
         StepVerifier.create(stackDetector.detectStacks(files))
                 .assertNext(stacks -> {
                     assertThat(stacks).extracting(DetectedStack::getStack)
-                            .contains(TechStack.DOCKER, TechStack.GITHUB_ACTIONS);
+                            .contains(TechStack.PYTHON, TechStack.FASTAPI);
                 })
                 .verifyComplete();
     }
