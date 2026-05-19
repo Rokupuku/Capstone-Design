@@ -4,11 +4,11 @@ import createDOMPurify from 'dompurify'
 import './App.css'
 
 const STAGES = [
-  { stage: 'VALIDATING_INPUT', label: '입력 검증' },
-  { stage: 'COLLECTING_FILES', label: 'GitHub 파일 수집' },
-  { stage: 'STATIC_ANALYSIS', label: '정적 분석' },
-  { stage: 'LLM_GENERATION', label: '기술 문서 생성' },
-  { stage: 'FINALIZING', label: '결과 정리' },
+  { stage: 'VALIDATING', label: '입력 검증' },
+  { stage: 'COLLECTING', label: 'GitHub 파일 수집' },
+  { stage: 'ANALYZING', label: '정적 분석' },
+  { stage: 'GENERATING', label: 'LLM 문서 생성' },
+  { stage: 'COMPLETED', label: '완료' },
 ]
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
@@ -37,6 +37,7 @@ function isProbablyGitHubRepoUrl(value) {
 
 export default function App() {
   const [githubUrl, setGithubUrl] = useState('')
+  const [projectDescription, setProjectDescription] = useState('')
   const [readmeText, setReadmeText] = useState('')
   const domPurifyRef = useRef(null)
   const [job, setJob] = useState(makeIdleJobState)
@@ -118,11 +119,11 @@ export default function App() {
 
     const jobId = `mock_${Math.random().toString(16).slice(2, 10)}`
     const stagePlan = [
-      { stage: 'VALIDATING_INPUT', ms: 800 },
-      { stage: 'COLLECTING_FILES', ms: 1600 },
-      { stage: 'STATIC_ANALYSIS', ms: 2000 },
-      { stage: 'LLM_GENERATION', ms: 2600 },
-      { stage: 'FINALIZING', ms: 900 },
+      { stage: 'VALIDATING', ms: 800 },
+      { stage: 'COLLECTING', ms: 1600 },
+      { stage: 'ANALYZING', ms: 2000 },
+      { stage: 'GENERATING', ms: 2600 },
+      { stage: 'COMPLETED', ms: 900 },
     ]
 
     setJob({
@@ -151,7 +152,7 @@ export default function App() {
           setJob((prev) => ({
             ...prev,
             status: 'done',
-            stage: 'FINALIZING',
+            stage: 'COMPLETED',
             stageProgress: 100,
             result: {
               markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- \`VITE_USE_MOCK_API=false\` 로 변경 후 실제 API 연동`,
@@ -210,6 +211,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           githubUrl: trimmed,
+          projectDescription: projectDescription.trim() || undefined,
         }),
       })
 
@@ -322,7 +324,24 @@ export default function App() {
                   autoComplete="off"
                 />
               </label>
-              <button className="btn btnPrimary" onClick={startAnalyzeJob} disabled={!canStart} type="button">
+            </div>
+
+            <div className="formRow">
+              <label className="label">
+                프로젝트 설명 (선택)
+                <textarea
+                  className="input textarea"
+                  style={{ minHeight: '80px', paddingTop: '8px' }}
+                  value={projectDescription}
+                  onChange={(e) => setProjectDescription(e.target.value)}
+                  placeholder="이 저장소에 대한 핵심 설명이나 특징을 적어주세요. README 생성에 활용됩니다."
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+
+            <div className="formRow">
+              <button className="btn btnPrimary" style={{ width: '100%' }} onClick={startAnalyzeJob} disabled={!canStart} type="button">
                 분석 시작
               </button>
             </div>
