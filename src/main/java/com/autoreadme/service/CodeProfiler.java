@@ -16,10 +16,13 @@ import java.util.regex.Pattern;
 public class CodeProfiler {
 
     // 정규표현식 패턴 개선: @GetMapping("/url"), @PostMapping(value = "/url") 등 대응
+    private static final Pattern CLASS_REQUEST_MAPPING = Pattern.compile("@RequestMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)\\s*public\\s+class");
     private static final Pattern GET_MAPPING = Pattern.compile("@GetMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)");
     private static final Pattern POST_MAPPING = Pattern.compile("@PostMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)");
-    private static final Pattern REQUEST_MAPPING = Pattern.compile("@RequestMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)");
-    
+    private static final Pattern PUT_MAPPING = Pattern.compile("@PutMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)");
+    private static final Pattern DELETE_MAPPING = Pattern.compile("@DeleteMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)");
+    private static final Pattern METHOD_REQUEST_MAPPING = Pattern.compile("@RequestMapping\\s*\\(\\s*(?:value\\s*=\\s*)?\"(.*?)\"\\s*\\)");
+
     private static final Pattern ENTITY_NAME = Pattern.compile("public\\s+class\\s+(\\w+)");
     private static final Pattern FIELD_NAME = Pattern.compile("private\\s+\\w+\\s+(\\w+);");
 
@@ -46,21 +49,46 @@ public class CodeProfiler {
     }
 
     private List<EndpointInfo> parseEndpoints(String content) {
+        String prefix = "";
+        Matcher classMatcher = CLASS_REQUEST_MAPPING.matcher(content);
+        if (classMatcher.find()) {
+            prefix = classMatcher.group(1);
+        }
+
         List<EndpointInfo> list = new ArrayList<>();
-        matchAndAdd(content, GET_MAPPING, "GET", list);
-        matchAndAdd(content, POST_MAPPING, "POST", list);
-        matchAndAdd(content, REQUEST_MAPPING, "ALL", list);
+        matchAndAdd(content, GET_MAPPING, "GET", prefix, list);
+        matchAndAdd(content, POST_MAPPING, "POST", prefix, list);
+        matchAndAdd(content, PUT_MAPPING, "PUT", prefix, list);
+        matchAndAdd(content, DELETE_MAPPING, "DELETE", prefix, list);
+        
+        // Method-level @RequestMapping (avoiding class-level match)
+        Matcher methodMatcher = METHOD_REQUEST_MAPPING.matcher(content);
+        while (methodMatcher.find()) {
+            String url = methodMatcher.group(1);
+            if (!url.equals(prefix)) { // Simple heuristic to avoid class-level match
+                list.add(EndpointInfo.builder()
+                        .method("ALL")
+                        .url(combinePath(prefix, url))
+                        .build());
+            }
+        }
         return list;
     }
 
-    private void matchAndAdd(String content, Pattern pattern, String method, List<EndpointInfo> list) {
+    private void matchAndAdd(String content, Pattern pattern, String method, String prefix, List<EndpointInfo> list) {
         Matcher matcher = pattern.matcher(content);
         while (matcher.find()) {
             list.add(EndpointInfo.builder()
                     .method(method)
-                    .url(matcher.group(1))
+                    .url(combinePath(prefix, matcher.group(1)))
                     .build());
         }
+    }
+
+    private String combinePath(String prefix, String suffix) {
+        String p = prefix.endsWith("/") ? prefix.substring(0, prefix.length() - 1) : prefix;
+        String s = suffix.startsWith("/") ? suffix : "/" + suffix;
+        return p + s;
     }
 
     private EntityInfo parseEntity(String content) {

@@ -59,10 +59,18 @@ public class ContextBuilder {
         sb.append("#### 4. Core Files Content\n");
         for (GitHubFileResponse file : coreFiles) {
             sb.append("--- File: ").append(file.path()).append(" ---\n");
-            sb.append(file.content()).append("\n\n");
+            sb.append(stripComments(file.content())).append("\n\n");
         }
 
         return sb.toString();
+    }
+
+    private String stripComments(String content) {
+        if (content == null) return "";
+        // Simple regex to remove single-line (//) and multi-line (/* */) comments
+        // Note: This is a basic implementation and might not handle all edge cases (e.g. comments inside strings)
+        return content.replaceAll("//.*|/\\*(?:.|[\\n\\r])*?\\*/", "")
+                .replaceAll("(?m)^[ \t]*\r?\n", ""); // Remove empty lines
     }
 
     /**
@@ -71,7 +79,7 @@ public class ContextBuilder {
     public List<GitHubFileResponse> selectCoreFiles(List<GitHubFileResponse> allFiles) {
         return allFiles.stream()
                 .filter(f -> isCoreFile(f.path()))
-                .limit(5) // 토큰 보호를 위해 최대 5개로 제한
+                .limit(10) // 토큰 보호를 위해 최대 10개로 제한
                 .collect(Collectors.toList());
     }
 
@@ -81,6 +89,9 @@ public class ContextBuilder {
                lower.endsWith("application.properties") ||
                lower.endsWith("application.yml") ||
                lower.endsWith("build.gradle") ||
-               lower.endsWith("package.json");
+               lower.endsWith("package.json") ||
+               lower.endsWith("service.java") ||
+               lower.endsWith("controller.java") ||
+               lower.endsWith("repository.java");
     }
 }

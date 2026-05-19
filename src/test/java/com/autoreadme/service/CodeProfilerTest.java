@@ -32,6 +32,29 @@ class CodeProfilerTest {
     }
 
     @Test
+    void testEndpointExtractionWithPrefix() {
+        String content = "@RestController\n" +
+                         "@RequestMapping(\"/api/v1\")\n" +
+                         "public class TestController {\n" +
+                         "    @GetMapping(\"/test\")\n" +
+                         "    public String test() { return \"ok\"; }\n" +
+                         "    @PutMapping(\"/update\")\n" +
+                         "    public void update() { }\n" +
+                         "    @DeleteMapping(\"/delete\")\n" +
+                         "    public void delete() { }\n" +
+                         "}";
+        GitHubFileResponse file = new GitHubFileResponse("TestController.java", content);
+
+        List<EndpointInfo> endpoints = codeProfiler.extractEndpoints(List.of(file));
+
+        assertThat(endpoints).hasSize(3);
+        assertThat(endpoints).extracting(EndpointInfo::getUrl)
+                .containsExactlyInAnyOrder("/api/v1/test", "/api/v1/update", "/api/v1/delete");
+        assertThat(endpoints).extracting(EndpointInfo::getMethod)
+                .contains("GET", "PUT", "DELETE");
+    }
+
+    @Test
     void testEntityExtraction() {
         String content = "@Entity\n" +
                          "public class User {\n" +
