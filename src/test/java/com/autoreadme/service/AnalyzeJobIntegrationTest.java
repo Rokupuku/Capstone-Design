@@ -32,12 +32,15 @@ class AnalyzeJobIntegrationTest {
     @MockitoBean
     private FileCollectionService fileCollectionService;
 
+    @MockitoBean
+    private LLMClient llmClient;
+
     @Test
     @DisplayName("전체 분석 파이프라인 통합 테스트 (Mock)")
     void fullPipelineTest() {
         // Given
         String githubUrl = "https://github.com/test/repo";
-        AnalyzeStartRequest request = new AnalyzeStartRequest(githubUrl, "main");
+        AnalyzeStartRequest request = new AnalyzeStartRequest(githubUrl, "main", "Test project");
 
         Mockito.when(gitHubClient.hasGitHubToken()).thenReturn(true);
         Mockito.when(gitHubClient.getDefaultBranch(anyString(), anyString())).thenReturn(Mono.just("main"));
@@ -48,6 +51,9 @@ class AnalyzeJobIntegrationTest {
         );
         Mockito.when(fileCollectionService.collectTargetFiles(anyString(), anyString(), anyString()))
                 .thenReturn(Flux.fromIterable(mockFiles));
+        
+        Mockito.when(llmClient.generateReadme(anyString(), anyString()))
+                .thenReturn(Mono.just("# AI Generated README\n\n- Spring Boot\n- /api/hello"));
 
         // When
         String jobId = analyzeJobService.start(request);

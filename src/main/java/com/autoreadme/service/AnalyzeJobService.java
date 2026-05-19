@@ -68,6 +68,7 @@ public class AnalyzeJobService {
     private final StackDetector stackDetector;
     private final CodeProfiler codeProfiler;
     private final ContextBuilder contextBuilder;
+    private final LLMClient llmClient;
 
     private final Map<String, JobState> jobs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -79,7 +80,7 @@ public class AnalyzeJobService {
         JobState state = JobState.running(jobId, AnalysisStage.VALIDATING);
         jobs.put(jobId, state);
 
-        executor.submit(() -> runJob(jobId, parsedRepo, normalizeBranch(request.branch())));
+        executor.submit(() -> runJob(jobId, parsedRepo, normalizeBranch(request.branch()), request.projectDescription()));
         return jobId;
     }
 
@@ -99,7 +100,7 @@ public class AnalyzeJobService {
         );
     }
 
-    private void runJob(String jobId, ParsedRepo parsedRepo, String requestedBranch) {
+    private void runJob(String jobId, ParsedRepo parsedRepo, String requestedBranch, String userDescription) {
         try {
             // 1. Validating
             updateStage(jobId, AnalysisStage.VALIDATING, 50, null);
@@ -136,10 +137,16 @@ public class AnalyzeJobService {
             AnalysisSummary summary = summarize(files, detectedStacks, endpoints, entities);
             updateStage(jobId, AnalysisStage.ANALYZING, 100, null);
 
-            // 4. Generating (Preview)
-            updateStage(jobId, AnalysisStage.GENERATING, 50, null);
-            AnalyzeResult result = buildResultMarkdown(parsedRepo, branch, summary);
-            updateStage(jobId, AnalysisStage.GENERATING, 100, null);
+            // 4. Generating (LLM)
+            updateStage(jobId, AnalysisStage.GENERATING, 20, null);
+            List<GitHubFileResponse> coreFiles = contextBuilder.selectCoreFiles(files);
+            String context = contextBuilder.buildContext(detectedStacks, endpoints, entities, coreFiles);
+            
+            String aiMarkdown = llmClient.generateReadme(context, userDescription)
+                    .block(Duration.ofMinutes(1));
+            
+            AnalyzeResult result = new AnalyzeResult(aiMarkdown, new AnalyzeGraph(summary.nodes(), summary.edges()));
+            updateStage(jobId, AnalysisStage.GENERATING, 100, result);
 
             // 5. Finalizing
             jobs.computeIfPresent(jobId, (id, prev) -> prev.done(result));
