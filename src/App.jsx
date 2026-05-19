@@ -1,7 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { marked } from 'marked'
 import createDOMPurify from 'dompurify'
+import mermaid from 'mermaid'
 import './App.css'
+
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  securityLevel: 'loose',
+  fontFamily: 'Inter, system-ui, sans-serif',
+})
+
+function Mermaid({ chart }) {
+  const ref = useRef(null)
+
+  useEffect(() => {
+    let isMounted = true
+    if (ref.current && chart) {
+      const id = `mermaid-${Math.random().toString(36).substring(2, 11)}`
+      mermaid
+        .render(id, chart)
+        .then(({ svg }) => {
+          if (isMounted && ref.current) {
+            ref.current.innerHTML = svg
+          }
+        })
+        .catch((err) => {
+          console.error('Mermaid render error:', err)
+        })
+    }
+    return () => {
+      isMounted = false
+    }
+  }, [chart])
+
+  return <div className="mermaidContainer" ref={ref} />
+}
+
+function convertToMermaid(graph) {
+  if (!graph || !graph.nodes || graph.nodes.length === 0) return ''
+  let str = 'graph TD\n'
+  graph.nodes.forEach((node) => {
+    // 괄호 등 특수문자 처리를 위해 따옴표 사용
+    str += `  ${node.id}["${node.label}"]\n`
+  })
+  graph.edges.forEach((edge) => {
+    str += `  ${edge.source} -->|${edge.relation}| ${edge.target}\n`
+  })
+  return str
+}
 
 const STAGES = [
   { stage: 'VALIDATING', label: '입력 검증' },
@@ -484,11 +531,14 @@ export default function App() {
                 <div className="resultSectionTitle">README 미리보기</div>
                 <div className="readmePreview" dangerouslySetInnerHTML={{ __html: readmeHtml }} />
 
-                <div className="resultSectionTitle resultSectionTitleMinor">연결 그래프(예정)</div>
-                <div className="graphPlaceholder">
-                  노드/엣지를 JSON으로 받아서 인터랙티브하게 시각화하면
-                  “유기적 연결 구조”를 문서와 함께 보여줄 수 있습니다.
-                </div>
+                <div className="resultSectionTitle resultSectionTitleMinor">연결 그래프</div>
+                {job.result?.graph?.nodes?.length > 0 ? (
+                  <Mermaid chart={convertToMermaid(job.result.graph)} />
+                ) : (
+                  <div className="graphPlaceholder">
+                    식별된 구성 요소 간의 관계가 없습니다.
+                  </div>
+                )}
 
                 <div className="actionsRow actionsRowTight">
                   <button

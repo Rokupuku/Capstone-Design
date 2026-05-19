@@ -382,6 +382,23 @@
   background: rgba(8, 12, 28, 0.6);
 }
 
+.mermaidContainer {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: rgba(8, 12, 28, 0.4);
+  min-height: 100px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: auto;
+}
+
+.mermaidContainer svg {
+  max-width: 100%;
+  height: auto;
+}
+
 .resultSectionTitleMinor {
   margin-top: 16px;
   margin-bottom: 8px;
