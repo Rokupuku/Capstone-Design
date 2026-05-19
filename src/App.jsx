@@ -39,14 +39,39 @@ function Mermaid({ chart }) {
 
 function convertToMermaid(graph) {
   if (!graph || !graph.nodes || graph.nodes.length === 0) return ''
-  let str = 'graph TD\n'
+  let str = 'graph LR\n' // 가로 방향이 더 보기 좋을 수 있음
+  
   graph.nodes.forEach((node) => {
-    // 괄호 등 특수문자 처리를 위해 따옴표 사용
-    str += `  ${node.id}["${node.label}"]\n`
+    // 타입별 도형 모양 변경
+    if (node.type === 'repo') {
+      str += `  ${node.id}(("${node.label}"))\n`
+    } else if (node.type === 'stack') {
+      str += `  ${node.id}{{"${node.label}"}}\n`
+    } else if (node.type === 'endpoint') {
+      str += `  ${node.id}["${node.label}"]\n`
+    } else if (node.type === 'entity') {
+      str += `  ${node.id}[("${node.label}")]\n`
+    } else {
+      str += `  ${node.id}["${node.label}"]\n`
+    }
   })
+
   graph.edges.forEach((edge) => {
-    str += `  ${edge.source} -->|${edge.relation}| ${edge.target}\n`
+    str += `  ${edge.source} -->|${edge.type}| ${edge.target}\n`
   })
+
+  // 스타일 정의
+  str += '  classDef repo fill:#487bff,stroke:#fff,stroke-width:2px,color:#fff;\n'
+  str += '  classDef stack fill:#8b5dff,stroke:#fff,stroke-width:1px,color:#fff;\n'
+  str += '  classDef endpoint fill:#10b981,stroke:#fff,stroke-width:1px,color:#fff;\n'
+  str += '  classDef entity fill:#f59e0b,stroke:#fff,stroke-width:1px,color:#fff;\n'
+  
+  graph.nodes.forEach((node) => {
+    if (node.type) {
+      str += `  class ${node.id} ${node.type};\n`
+    }
+  })
+
   return str
 }
 

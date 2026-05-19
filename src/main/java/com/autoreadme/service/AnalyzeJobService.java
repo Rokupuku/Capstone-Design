@@ -238,6 +238,43 @@ public class AnalyzeJobService {
             List<EndpointInfo> endpoints,
             List<EntityInfo> entities
     ) {
+        List<GraphNode> nodes = new ArrayList<>();
+        List<GraphEdge> edges = new ArrayList<>();
+        
+        // 1. Central Repository Node
+        String repoId = "repo_root";
+        nodes.add(new GraphNode(repoId, "Project Repository", "repo"));
+
+        // 2. Tech Stacks
+        if (detectedStacks != null) {
+            for (int i = 0; i < detectedStacks.size(); i++) {
+                DetectedStack ds = detectedStacks.get(i);
+                String stackId = "stack_" + i;
+                nodes.add(new GraphNode(stackId, ds.getStack().getDisplayName(), "stack"));
+                edges.add(new GraphEdge(repoId, stackId, "uses"));
+            }
+        }
+
+        // 3. API Endpoints (Top 8 for clarity)
+        int endpointLimit = Math.min(endpoints.size(), 8);
+        for (int i = 0; i < endpointLimit; i++) {
+            EndpointInfo ep = endpoints.get(i);
+            String epId = "ep_" + i;
+            String label = ep.getMethod() + " " + ep.getUrl();
+            nodes.add(new GraphNode(epId, label, "endpoint"));
+            edges.add(new GraphEdge(repoId, epId, "exposes"));
+        }
+
+        // 4. Database Entities (Top 8 for clarity)
+        int entityLimit = Math.min(entities.size(), 8);
+        for (int i = 0; i < entityLimit; i++) {
+            EntityInfo en = entities.get(i);
+            String enId = "en_" + i;
+            nodes.add(new GraphNode(enId, en.getName(), "entity"));
+            edges.add(new GraphEdge(repoId, enId, "persists"));
+        }
+
+        // 5. File Extensions (Simplified)
         Map<String, Long> extCount = files.stream()
                 .collect(Collectors.groupingBy(
                         f -> extensionOf(f.path()),
@@ -246,20 +283,8 @@ public class AnalyzeJobService {
 
         List<Map.Entry<String, Long>> topExt = extCount.entrySet().stream()
                 .sorted(Map.Entry.<String, Long>comparingByValue(Comparator.reverseOrder()))
-                .limit(8)
+                .limit(5)
                 .toList();
-
-        List<GraphNode> nodes = new ArrayList<>();
-        List<GraphEdge> edges = new ArrayList<>();
-        nodes.add(new GraphNode("repo", "Repository", "repo"));
-
-        int idx = 0;
-        for (Map.Entry<String, Long> ext : topExt) {
-            String nodeId = "ext_" + idx++;
-            String label = ext.getKey() + " (" + ext.getValue() + ")";
-            nodes.add(new GraphNode(nodeId, label, "file-type"));
-            edges.add(new GraphEdge("repo", nodeId, "contains"));
-        }
 
         return new AnalysisSummary(files.size(), topExt, nodes, edges, detectedStacks, endpoints, entities);
     }
