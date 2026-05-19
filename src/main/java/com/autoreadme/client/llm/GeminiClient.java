@@ -21,7 +21,7 @@ public class GeminiClient implements LLMClient {
     @Value("${gemini.api.key:}")
     private String apiKey;
 
-    private static final String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+    private static final String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent";
 
     @Override
     public Mono<String> generateReadme(String context, String userDescription) {
@@ -45,9 +45,10 @@ public class GeminiClient implements LLMClient {
                 .retrieve()
                 .bodyToMono(Map.class)
                 .map(this::extractTextFromResponse)
+                .retry(3) // 일시적인 503 에러 대비 3회 재시도
                 .onErrorResume(e -> {
-                    log.error("Gemini API call failed", e);
-                    return Mono.just("LLM 생성 중 오류가 발생했습니다: " + e.getMessage());
+                    log.error("Gemini API call failed after retries", e);
+                    return Mono.just("LLM 생성 중 오류가 발생했습니다 (재시도 실패): " + e.getMessage());
                 });
     }
 
