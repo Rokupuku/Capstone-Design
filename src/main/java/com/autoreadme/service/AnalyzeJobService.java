@@ -11,6 +11,10 @@ import com.autoreadme.api.dto.GraphEdge;
 import com.autoreadme.api.dto.GraphNode;
 import com.autoreadme.client.github.GitHubClient;
 import com.autoreadme.client.github.model.GitHubFileResponse;
+import com.autoreadme.domain.AnalyzeJobEntity;
+import com.autoreadme.domain.AnalyzeJobRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -69,6 +73,8 @@ public class AnalyzeJobService {
     private final CodeProfiler codeProfiler;
     private final ContextBuilder contextBuilder;
     private final LLMClient llmClient;
+    private final AnalyzeJobRepository analyzeJobRepository;
+    private final ObjectMapper objectMapper;
 
     private final Map<String, JobState> jobs = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
@@ -79,6 +85,7 @@ public class AnalyzeJobService {
 
         JobState state = JobState.running(jobId, AnalysisStage.VALIDATING);
         jobs.put(jobId, state);
+        saveToDb(state);
 
         executor.submit(() -> runJob(jobId, parsedRepo, normalizeBranch(request.branch()), request.projectDescription()));
         return jobId;
@@ -86,17 +93,43 @@ public class AnalyzeJobService {
 
     public AnalyzeStatusResponse getStatus(String jobId) {
         JobState state = jobs.get(jobId);
-        if (state == null) {
-            throw new NoSuchElementException("해당 jobId를 찾을 수 없습니다: " + jobId);
+        if (state != null) {
+            return new AnalyzeStatusResponse(
+                    state.status,
+                    state.jobId,
+                    state.stage.name(),
+                    state.stageProgress,
+                    state.error,
+                    state.result
+            );
         }
 
+        return analyzeJobRepository.findById(jobId)
+                .map(this::mapToStatusResponse)
+                .orElseThrow(() -> new NoSuchElementException("해당 jobId를 찾을 수 없습니다: " + jobId));
+    }
+
+    private AnalyzeStatusResponse mapToStatusResponse(AnalyzeJobEntity entity) {
+        AnalyzeGraph graph = null;
+        if (entity.getGraphJson() != null) {
+            try {
+                graph = objectMapper.readValue(entity.getGraphJson(), AnalyzeGraph.class);
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to deserialize graph for jobId: {}", entity.getJobId());
+            }
+        }
+
+        AnalyzeResult result = (entity.getMarkdown() != null || graph != null)
+                ? new AnalyzeResult(entity.getMarkdown(), graph)
+                : null;
+
         return new AnalyzeStatusResponse(
-                state.status,
-                state.jobId,
-                state.stage.name(),
-                state.stageProgress,
-                state.error,
-                state.result
+                entity.getStatus(),
+                entity.getJobId(),
+                entity.getStage().name(),
+                entity.getStageProgress(),
+                entity.getError(),
+                result
         );
     }
 
@@ -149,18 +182,53 @@ public class AnalyzeJobService {
             updateStage(jobId, AnalysisStage.GENERATING, 100, result);
 
             // 5. Finalizing
-            jobs.computeIfPresent(jobId, (id, prev) -> prev.done(result));
+            jobs.computeIfPresent(jobId, (id, prev) -> {
+                JobState next = prev.done(result);
+                saveToDb(next);
+                return next;
+            });
             log.info("Analyze job completed successfully. jobId={}", jobId);
 
         } catch (Exception e) {
             log.error("Analyze job failed. jobId={}, reason={}", jobId, e.getMessage());
-            jobs.computeIfPresent(jobId, (id, prev) -> prev.failed(userFacingError(e)));
+            jobs.computeIfPresent(jobId, (id, prev) -> {
+                JobState next = prev.failed(userFacingError(e));
+                saveToDb(next);
+                return next;
+            });
         }
     }
 
     private void updateStage(String jobId, AnalysisStage stage, int subProgress, AnalyzeResult result) {
         // subProgress는 해당 단계 내에서의 진행률(0~100)
-        jobs.computeIfPresent(jobId, (id, prev) -> prev.runningStage(stage, subProgress, result));
+        jobs.computeIfPresent(jobId, (id, prev) -> {
+            JobState next = prev.runningStage(stage, subProgress, result);
+            saveToDb(next);
+            return next;
+        });
+    }
+
+    private void saveToDb(JobState state) {
+        String graphJson = null;
+        if (state.result != null && state.result.graph() != null) {
+            try {
+                graphJson = objectMapper.writeValueAsString(state.result.graph());
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize graph for jobId: {}", state.jobId);
+            }
+        }
+
+        AnalyzeJobEntity entity = AnalyzeJobEntity.builder()
+                .jobId(state.jobId)
+                .status(state.status)
+                .stage(state.stage)
+                .stageProgress(state.stageProgress)
+                .markdown(state.result != null ? state.result.markdown() : null)
+                .graphJson(graphJson)
+                .error(state.error)
+                .build();
+
+        analyzeJobRepository.save(entity);
     }
 
 
