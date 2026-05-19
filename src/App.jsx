@@ -39,10 +39,9 @@ function Mermaid({ chart }) {
 
 function convertToMermaid(graph) {
   if (!graph || !graph.nodes || graph.nodes.length === 0) return ''
-  let str = 'graph LR\n' // 가로 방향이 더 보기 좋을 수 있음
+  let str = 'graph LR\n' 
   
   graph.nodes.forEach((node) => {
-    // 타입별 도형 모양 변경
     if (node.type === 'repo') {
       str += `  ${node.id}(("${node.label}"))\n`
     } else if (node.type === 'stack') {
@@ -60,7 +59,6 @@ function convertToMermaid(graph) {
     str += `  ${edge.source} -->|${edge.type}| ${edge.target}\n`
   })
 
-  // 스타일 정의
   str += '  classDef repo fill:#487bff,stroke:#fff,stroke-width:2px,color:#fff;\n'
   str += '  classDef stack fill:#8b5dff,stroke:#fff,stroke-width:1px,color:#fff;\n'
   str += '  classDef endpoint fill:#10b981,stroke:#fff,stroke-width:1px,color:#fff;\n'
@@ -85,7 +83,6 @@ const STAGES = [
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
 const MOCK_FLAG = import.meta.env.VITE_USE_MOCK_API
-/** 명시 true가 아니면 실제 API를 사용하도록 변경 */
 const USE_MOCK_API = MOCK_FLAG === 'true'
 const POLLING_INTERVAL_MS = 1000
 
@@ -97,25 +94,24 @@ function normalizeFetchError(err, fallback) {
     /networkerror/i.test(raw) ||
     /network request failed/i.test(raw)
   ) {
-    return `백엔드에 연결할 수 없습니다. (${API_BASE_URL}) 서버가 실행 중인지 확인해 주세요. (또는 .env에 VITE_USE_MOCK_API=true 설정)`
+    return `백엔드에 연결할 수 없습니다. (${API_BASE_URL}) 서버가 실행 중인지 확인해 주세요.`
   }
   return raw || fallback
 }
+
 const COLOR_SCHEME_STORAGE_KEY = 'autoreadme-color-scheme'
 
 function readStoredColorScheme() {
   try {
     const v = localStorage.getItem(COLOR_SCHEME_STORAGE_KEY)
     if (v === 'light' || v === 'dark') return v
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
   return 'dark'
 }
 
 function makeIdleJobState() {
   return {
-    status: 'idle', // idle | running | done | failed
+    status: 'idle', 
     jobId: null,
     stage: null,
     stageProgress: 0,
@@ -151,7 +147,6 @@ export default function App() {
   const progressBarWidth = `${clampInt(job.stageProgress, 0, 100)}%`
 
   useEffect(() => {
-    // browser 환경에서만 sanitizer 인스턴스를 생성합니다.
     domPurifyRef.current = createDOMPurify(window)
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
@@ -163,9 +158,7 @@ export default function App() {
     root.setAttribute('data-theme', colorScheme)
     try {
       localStorage.setItem(COLOR_SCHEME_STORAGE_KEY, colorScheme)
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }, [colorScheme])
 
   function clearPolling() {
@@ -222,31 +215,9 @@ export default function App() {
       }
     }, POLLING_INTERVAL_MS)
   }
-          status: data.status ?? 'failed',
-          jobId: data.jobId ?? jobId,
-          stage: data.stage ?? null,
-          stageProgress: clampInt(data.stageProgress ?? 0, 0, 100),
-          error: data.error ?? null,
-          result: data.result ?? null,
-        })
-
-        if (data.status === 'done' || data.status === 'failed') {
-          clearPolling()
-        }
-      } catch (e) {
-        clearPolling()
-        setJob((prev) => ({
-          ...prev,
-          status: 'failed',
-          error: normalizeFetchError(e, '상태 조회 중 오류가 발생했습니다.'),
-        }))
-      }
-    }, POLLING_INTERVAL_MS)
-  }
 
   function startMockJob(trimmedUrl) {
     clearPolling()
-
     const jobId = `mock_${Math.random().toString(16).slice(2, 10)}`
     const stagePlan = [
       { stage: 'VALIDATING', ms: 800 },
@@ -285,38 +256,26 @@ export default function App() {
             stage: 'COMPLETED',
             stageProgress: 100,
             result: {
-              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- 실 API 연동: 개발에서 \`VITE_USE_MOCK_API=false\` 를 명시하거나 프로덕션 빌드로 실행`,
+              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- 실 API 연동 시 \`VITE_USE_MOCK_API=false\` 설정`,
               graph: { nodes: [], edges: [] },
             },
           }))
           return
         }
-
-        setJob((prev) => ({
-          ...prev,
-          stage: stagePlan[stageIdx].stage,
-          stageProgress: 0,
-        }))
+        setJob((prev) => ({ ...prev, stage: stagePlan[stageIdx].stage, stageProgress: 0 }))
         return
       }
-
-      setJob((prev) => ({
-        ...prev,
-        stage: current.stage,
-        stageProgress,
-      }))
+      setJob((prev) => ({ ...prev, stage: current.stage, stageProgress }))
     }, 100)
   }
 
   async function startAnalyzeJob() {
     const trimmed = githubUrl.trim()
-    if (!isAcceptableAnalyzeUrl(trimmed)) {
+    if (!isProbablyGitHubRepoUrl(trimmed)) {
       setJob((prev) => ({
         ...prev,
         status: 'failed',
-        error: RELAX_GITHUB_URL_FOR_STAGE_PREVIEW
-          ? 'http(s):// 로 시작하는 URL을 입력해주세요.'
-          : 'GitHub 저장소 URL을 확인해주세요. 예: https://github.com/{owner}/{repo}',
+        error: 'GitHub 저장소 URL을 확인해주세요. 예: https://github.com/{owner}/{repo}',
       }))
       return
     }
@@ -327,11 +286,10 @@ export default function App() {
     }
 
     clearPolling()
-
     setJob({
       status: 'running',
       jobId: null,
-      stage: 'VALIDATING_INPUT',
+      stage: 'VALIDATING',
       stageProgress: 0,
       error: null,
       result: null,
@@ -354,15 +312,9 @@ export default function App() {
 
       const data = await res.json()
       const jobId = data?.jobId
-      if (!jobId) {
-        throw new Error('백엔드 응답에 jobId가 없습니다.')
-      }
+      if (!jobId) throw new Error('백엔드 응답에 jobId가 없습니다.')
 
-      setJob((prev) => ({
-        ...prev,
-        jobId,
-        status: 'running',
-      }))
+      setJob((prev) => ({ ...prev, jobId, status: 'running' }))
       startPollingJobStatus(jobId)
     } catch (e) {
       setJob((prev) => ({
@@ -373,7 +325,7 @@ export default function App() {
     }
   }
 
-  const canStart = isAcceptableAnalyzeUrl(githubUrl) && job.status !== 'running'
+  const canStart = isProbablyGitHubRepoUrl(githubUrl) && job.status !== 'running'
 
   useEffect(() => {
     if (job.status === 'done' && job.result?.markdown) {
@@ -384,7 +336,6 @@ export default function App() {
   const readmeHtml = useMemo(() => {
     const md = readmeText ?? ''
     const rawHtml = marked.parse(md, { gfm: true, breaks: true })
-    // LLM/유저 입력을 렌더링하므로 기본 XSS 방어를 위해 sanitize
     const purifier = domPurifyRef.current
     return purifier ? purifier.sanitize(rawHtml) : rawHtml
   }, [readmeText])
@@ -393,7 +344,6 @@ export default function App() {
     try {
       await navigator.clipboard.writeText(readmeText)
     } catch (e) {
-      // 일부 환경에서 clipboard API가 막혀있을 수 있어 fallback 제공
       const ta = document.createElement('textarea')
       ta.value = readmeText
       ta.style.position = 'fixed'
@@ -454,7 +404,7 @@ export default function App() {
           <section className="card heroCard">
             <h1 className="pageTitle">GitHub 저장소를 넣으면, 기술 문서를 자동 생성합니다</h1>
             <p className="pageDesc">
-              진행률은 단계(stage)로 표시하고, 실패 시 재시도 UX를 지원하는 형태로 구성합니다.
+              프로젝트 코드 분석을 통해 고품질의 README.md를 자동으로 만들어 드립니다.
             </p>
 
             <div className="formRow">
@@ -490,17 +440,6 @@ export default function App() {
                 분석 시작
               </button>
             </div>
-
-            <div className="helperRow">
-              <div className="helperItem">
-                <span className="helperDot" aria-hidden="true" />
-                <span>단계별 진행률: `stage + stageProgress`(0~100)</span>
-              </div>
-              <div className="helperItem">
-                <span className="helperDot helperDot2" aria-hidden="true" />
-                <span>재시도/실패 표시를 위한 상태 머신 기반 UX</span>
-              </div>
-            </div>
           </section>
         ) : null}
 
@@ -511,9 +450,7 @@ export default function App() {
                 <div className="cardTitle">분석 진행 중</div>
                 <div className="cardSub">
                   {job.jobId ? (
-                    <>
-                      Job: <span className="mono">{job.jobId}</span>
-                    </>
+                    <>Job: <span className="mono">{job.jobId}</span></>
                   ) : null}
                 </div>
               </div>
@@ -521,7 +458,7 @@ export default function App() {
                 {job.stage ? (
                   <>
                     <div className="stageName">
-                      {STAGES[currentStageIndex]?.label ?? job.stage}
+                      {STAGES.find(s => s.stage === job.stage)?.label ?? job.stage}
                     </div>
                     <div className="stageProgress">{job.stageProgress}%</div>
                   </>
@@ -529,21 +466,13 @@ export default function App() {
               </div>
             </div>
 
-            <div
-              className="progressTrack"
-              role="progressbar"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow={job.stageProgress}
-            >
+            <div className="progressTrack" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={job.stageProgress}>
               <div className="progressFill" style={{ width: progressBarWidth }} />
             </div>
 
             <div className="stepper" aria-label="분석 단계">
               {STAGES.map((s, idx) => {
-                const state =
-                  idx < currentStageIndex ? 'done' : idx === currentStageIndex ? 'active' : 'todo'
-
+                const state = idx < currentStageIndex ? 'done' : idx === currentStageIndex ? 'active' : 'todo'
                 return (
                   <div key={s.stage} className={`step ${state}`}>
                     <div className="stepDot" aria-hidden="true" />
@@ -551,20 +480,6 @@ export default function App() {
                   </div>
                 )
               })}
-            </div>
-
-            <div className="runningHint">
-              {USE_MOCK_API ? (
-                <>
-                  현재 목업 모드입니다. 백엔드 없이 단계 진행/완료 화면을 시뮬레이션합니다.
-                </>
-              ) : (
-                <>
-                  백엔드 API를 실제 호출 중입니다.
-                  <code>POST /api/analyze</code>로 작업을 시작하고,
-                  <code>GET /api/analyze/{'{jobId}'}</code>를 1초 간격으로 폴링해 상태를 갱신합니다.
-                </>
-              )}
             </div>
           </section>
         ) : null}
@@ -639,13 +554,7 @@ export default function App() {
                 )}
 
                 <div className="actionsRow actionsRowTight">
-                  <button
-                    className="btn btnPrimary"
-                    onClick={() => {
-                      resetJob()
-                    }}
-                    type="button"
-                  >
+                  <button className="btn btnPrimary" onClick={resetJob} type="button">
                     새 분석
                   </button>
                 </div>
