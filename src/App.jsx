@@ -83,17 +83,10 @@ const STAGES = [
   { stage: 'COMPLETED', label: '완료' },
 ]
 
-/** 임시: 단계별 UI 확인용 — true면 GitHub 형식이 아니어도 URL만 있으면 분석 시작 가능 */
-const RELAX_GITHUB_URL_FOR_STAGE_PREVIEW = true
-/** 임시: 주소창 쿼리로 진행 화면 단계를 바로 표시 (?previewStage=STATIC_ANALYSIS&previewUrl=https%3A%2F%2Fexample.com) */
-const PREVIEW_STAGE_QUERY = 'previewStage'
-const PREVIEW_URL_QUERY = 'previewUrl'
-
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
 const MOCK_FLAG = import.meta.env.VITE_USE_MOCK_API
-/** 명시 true/false가 없으면 개발 서버에서는 목업(백엔드 없이 동작), 프로덕션 빌드에서는 실 API */
-const USE_MOCK_API =
-  MOCK_FLAG === 'true' ? true : MOCK_FLAG === 'false' ? false : Boolean(import.meta.env.DEV)
+/** 명시 true가 아니면 실제 API를 사용하도록 변경 */
+const USE_MOCK_API = MOCK_FLAG === 'true'
 const POLLING_INTERVAL_MS = 1000
 
 function normalizeFetchError(err, fallback) {
@@ -104,7 +97,7 @@ function normalizeFetchError(err, fallback) {
     /networkerror/i.test(raw) ||
     /network request failed/i.test(raw)
   ) {
-    return `백엔드에 연결할 수 없습니다. (${API_BASE_URL}) 서버 실행 여부를 확인하거나, 목업을 쓰려면 개발 서버를 그대로 두거나 .env에 VITE_USE_MOCK_API=true 를 설정하세요.`
+    return `백엔드에 연결할 수 없습니다. (${API_BASE_URL}) 서버가 실행 중인지 확인해 주세요. (또는 .env에 VITE_USE_MOCK_API=true 설정)`
   }
   return raw || fallback
 }
@@ -140,31 +133,6 @@ function isProbablyGitHubRepoUrl(value) {
   return v.startsWith('https://github.com/') || v.startsWith('http://github.com/')
 }
 
-function isAcceptableAnalyzeUrl(value) {
-  const v = value.trim()
-  if (!v) return false
-  if (RELAX_GITHUB_URL_FOR_STAGE_PREVIEW) {
-    return /^https?:\/\//i.test(v)
-  }
-  return isProbablyGitHubRepoUrl(value)
-}
-
-function readPreviewStageFromUrl() {
-  try {
-    const params = new URLSearchParams(window.location.search)
-    const stage = params.get(PREVIEW_STAGE_QUERY)
-    if (!stage || !STAGES.some((s) => s.stage === stage)) return null
-    const previewUrl = params.get(PREVIEW_URL_QUERY)?.trim()
-    return {
-      stage,
-      previewUrl: previewUrl && /^https?:\/\//i.test(previewUrl) ? previewUrl : 'https://github.com/preview/preview',
-      progress: clampInt(Number.parseInt(params.get('previewProgress') ?? '42', 10), 0, 100),
-    }
-  } catch {
-    return null
-  }
-}
-
 export default function App() {
   const [githubUrl, setGithubUrl] = useState('')
   const [projectDescription, setProjectDescription] = useState('')
@@ -188,21 +156,6 @@ export default function App() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
     }
-  }, [])
-
-  useEffect(() => {
-    if (!RELAX_GITHUB_URL_FOR_STAGE_PREVIEW) return
-    const preview = readPreviewStageFromUrl()
-    if (!preview) return
-    setGithubUrl(preview.previewUrl)
-    setJob({
-      status: 'running',
-      jobId: `preview_${preview.stage}`,
-      stage: preview.stage,
-      stageProgress: preview.progress,
-      error: null,
-      result: null,
-    })
   }, [])
 
   useEffect(() => {
@@ -248,6 +201,27 @@ export default function App() {
 
         const data = await res.json()
         setJob({
+          status: data.status ?? 'failed',
+          jobId: data.jobId ?? jobId,
+          stage: data.stage ?? null,
+          stageProgress: clampInt(data.stageProgress ?? 0, 0, 100),
+          error: data.error ?? null,
+          result: data.result ?? null,
+        })
+
+        if (data.status === 'done' || data.status === 'failed') {
+          clearPolling()
+        }
+      } catch (e) {
+        clearPolling()
+        setJob((prev) => ({
+          ...prev,
+          status: 'failed',
+          error: normalizeFetchError(e, '상태 조회 중 오류가 발생했습니다.'),
+        }))
+      }
+    }, POLLING_INTERVAL_MS)
+  }
           status: data.status ?? 'failed',
           jobId: data.jobId ?? jobId,
           stage: data.stage ?? null,
