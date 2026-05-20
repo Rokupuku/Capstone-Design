@@ -4,12 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
+    "dev": "node ./node_modules/vite/dist/node/cli.js",
+    "build": "node ./node_modules/vite/dist/node/cli.js build",
+    "lint": "node ./node_modules/eslint/lib/cli.js .",
+    "preview": "node ./node_modules/vite/dist/node/cli.js preview"
   },
   "dependencies": {
+    "dompurify": "^3.2.8",
+    "marked": "^15.0.6",
+    "mermaid": "^11.15.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
