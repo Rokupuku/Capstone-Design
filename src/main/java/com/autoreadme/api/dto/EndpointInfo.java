@@ -13,4 +13,9 @@ public class EndpointInfo {
     private String method; // GET, POST, etc.
     private String url;
     private String description;
+    private String controllerName;
+    private String methodName;
+    private String filePath;
+    private String requestDto;
+    private String responseDto;
 }

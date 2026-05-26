@@ -13,4 +13,8 @@ import java.util.List;
 public class EntityInfo {
     private String name;
     private List<String> fields;
+    private List<EntityFieldInfo> fieldDetails;
+    private String tableName;
+    private List<EntityRelationInfo> relationships;
+    private String filePath;
 }
