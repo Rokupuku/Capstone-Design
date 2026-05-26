@@ -21,48 +21,84 @@ public class ContextBuilder {
             List<GitHubFileResponse> coreFiles
     ) {
         StringBuilder sb = new StringBuilder();
-        sb.append("### Project Technical Context\n\n");
+        sb.append("<project_context>\n");
 
-        // 1. Tech Stacks
-        sb.append("#### 1. Detected Tech Stacks\n");
-        if (stacks.isEmpty()) {
-            sb.append("- No specific tech stacks detected.\n");
-        } else {
-            stacks.forEach(s -> sb.append("- ").append(s.getStack().getDisplayName())
-                    .append(" (").append(s.getCategory()).append(")\n"));
+        sb.append("  <readme_template>\n");
+        sb.append("    <section>프로젝트 소개</section>\n");
+        sb.append("    <section>주요 기능</section>\n");
+        sb.append("    <section>기술 스택</section>\n");
+        sb.append("    <section>실행 방법</section>\n");
+        sb.append("    <section>환경 변수</section>\n");
+        sb.append("    <section>API 명세</section>\n");
+        sb.append("    <section>DB 구조</section>\n");
+        sb.append("    <section>아키텍처</section>\n");
+        sb.append("  </readme_template>\n");
+
+        sb.append("  <detected_stacks>\n");
+        for (DetectedStack stack : stacks) {
+            sb.append("    <stack category=\"").append(xml(stack.getCategory())).append("\">")
+                    .append(xml(stack.getStack().getDisplayName()))
+                    .append("</stack>\n");
         }
-        sb.append("\n");
+        sb.append("  </detected_stacks>\n");
 
-        // 2. API Endpoints
-        sb.append("#### 2. API Endpoints\n");
-        if (endpoints.isEmpty()) {
-            sb.append("- No endpoints detected.\n");
-        } else {
-            endpoints.forEach(e -> sb.append("- [").append(e.getMethod()).append("] ")
-                    .append(e.getUrl()).append("\n"));
+        sb.append("  <api_endpoints>\n");
+        for (EndpointInfo endpoint : endpoints) {
+            sb.append("    <endpoint method=\"").append(xml(endpoint.getMethod()))
+                    .append("\" path=\"").append(xml(endpoint.getUrl()))
+                    .append("\" controller=\"").append(xml(endpoint.getControllerName()))
+                    .append("\" handler=\"").append(xml(endpoint.getMethodName()))
+                    .append("\" file=\"").append(xml(endpoint.getFilePath()))
+                    .append("\" request=\"").append(xml(endpoint.getRequestDto()))
+                    .append("\" response=\"").append(xml(endpoint.getResponseDto()))
+                    .append("\" />\n");
         }
-        sb.append("\n");
+        sb.append("  </api_endpoints>\n");
 
-        // 3. Database Entities
-        sb.append("#### 3. Database Entities\n");
-        if (entities.isEmpty()) {
-            sb.append("- No entities detected.\n");
-        } else {
-            entities.forEach(en -> {
-                sb.append("- ").append(en.getName()).append(": ")
-                        .append(String.join(", ", en.getFields())).append("\n");
-            });
+        sb.append("  <database_entities>\n");
+        for (EntityInfo entity : entities) {
+            sb.append("    <entity name=\"").append(xml(entity.getName()))
+                    .append("\" table=\"").append(xml(entity.getTableName()))
+                    .append("\" file=\"").append(xml(entity.getFilePath()))
+                    .append("\">\n");
+            if (entity.getFieldDetails() != null) {
+                for (var field : entity.getFieldDetails()) {
+                    sb.append("      <field name=\"").append(xml(field.getName()))
+                            .append("\" type=\"").append(xml(field.getType()))
+                            .append("\" column=\"").append(xml(field.getColumnName()))
+                            .append("\" />\n");
+                }
+            }
+            if (entity.getRelationships() != null) {
+                for (var relation : entity.getRelationships()) {
+                    sb.append("      <relation field=\"").append(xml(relation.getFieldName()))
+                            .append("\" type=\"").append(xml(relation.getRelationType()))
+                            .append("\" target=\"").append(xml(relation.getTargetEntity()))
+                            .append("\" />\n");
+                }
+            }
+            sb.append("    </entity>\n");
         }
-        sb.append("\n");
+        sb.append("  </database_entities>\n");
 
-        // 4. Core Files Content
-        sb.append("#### 4. Core Files Content\n");
+        sb.append("  <core_files>\n");
         for (GitHubFileResponse file : coreFiles) {
-            sb.append("--- File: ").append(file.path()).append(" ---\n");
-            sb.append(stripComments(file.content())).append("\n\n");
+            sb.append("    <file path=\"").append(xml(file.path())).append("\"><![CDATA[\n");
+            sb.append(stripComments(file.content())).append("\n");
+            sb.append("    ]]></file>\n");
         }
+        sb.append("  </core_files>\n");
+        sb.append("</project_context>\n");
 
         return sb.toString();
+    }
+
+    private String xml(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;")
+                .replace("\"", "&quot;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
     }
 
     private String stripComments(String content) {

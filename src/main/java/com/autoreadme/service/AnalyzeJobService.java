@@ -18,6 +18,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Flux;
 
 import jakarta.annotation.PreDestroy;
@@ -41,23 +42,39 @@ import java.util.stream.Collectors;
 public class AnalyzeJobService {
 
     public enum AnalysisStage {
-        VALIDATING("입력값 검증 중", 10),
-        COLLECTING("파일 수집 중", 40),
-        ANALYZING("코드 분석 중", 70),
-        GENERATING("문서 생성 중", 90),
-        COMPLETED("분석 완료", 100),
-        FAILED("분석 실패", 0);
+        VALIDATING("입력값 검증 중", 0, 10),
+        COLLECTING_FILES("파일 수집 중", 10, 35),
+        DETECTING_STACK("기술 스택 분석 중", 35, 50),
+        PROFILING_CODE("코드 구조 분석 중", 50, 65),
+        BUILDING_CONTEXT("LLM 컨텍스트 구성 중", 65, 78),
+        GENERATING_README("README 생성 중", 78, 95),
+        COMPLETED("분석 완료", 100, 100),
+        FAILED("분석 실패", 0, 0);
 
         private final String label;
-        private final int defaultProgress;
+        private final int startProgress;
+        private final int endProgress;
 
-        AnalysisStage(String label, int defaultProgress) {
+        AnalysisStage(String label, int startProgress, int endProgress) {
             this.label = label;
-            this.defaultProgress = defaultProgress;
+            this.startProgress = startProgress;
+            this.endProgress = endProgress;
         }
 
         public String getLabel() { return label; }
-        public int getDefaultProgress() { return defaultProgress; }
+        public int progressAt(int subProgress) {
+            int clamped = Math.max(0, Math.min(100, subProgress));
+            return startProgress + ((endProgress - startProgress) * clamped / 100);
+        }
+    }
+
+    public enum FailureCode {
+        INVALID_GITHUB_URL,
+        GITHUB_TOKEN_MISSING,
+        REPOSITORY_NOT_FOUND,
+        RATE_LIMITED,
+        LLM_GENERATION_FAILED,
+        UNKNOWN_ERROR
     }
 
     private static final String STATUS_RUNNING = "running";
@@ -81,13 +98,14 @@ public class AnalyzeJobService {
 
     public String start(AnalyzeStartRequest request) {
         ParsedRepo parsedRepo = parseGithubRepoUrl(request.githubUrl());
+        String branch = normalizeBranch(request.branch());
         String jobId = "job_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
 
-        JobState state = JobState.running(jobId, AnalysisStage.VALIDATING);
+        JobState state = JobState.running(jobId, AnalysisStage.VALIDATING, parsedRepo, branch);
         jobs.put(jobId, state);
         saveToDb(state);
 
-        executor.submit(() -> runJob(jobId, parsedRepo, normalizeBranch(request.branch()), request.projectDescription()));
+        executor.submit(() -> runJob(jobId, parsedRepo, branch, request.projectDescription()));
         return jobId;
     }
 
@@ -99,6 +117,7 @@ public class AnalyzeJobService {
                     state.jobId,
                     state.stage.name(),
                     state.stageProgress,
+                    state.errorCode,
                     state.error,
                     state.result
             );
@@ -128,6 +147,7 @@ public class AnalyzeJobService {
                 entity.getJobId(),
                 entity.getStage().name(),
                 entity.getStageProgress(),
+                entity.getErrorCode(),
                 entity.getError(),
                 result
         );
@@ -135,10 +155,9 @@ public class AnalyzeJobService {
 
     private void runJob(String jobId, ParsedRepo parsedRepo, String requestedBranch, String userDescription) {
         try {
-            // 1. Validating
             updateStage(jobId, AnalysisStage.VALIDATING, 50, null);
             if (!gitHubClient.hasGitHubToken()) {
-                throw new IllegalArgumentException("github.api.token 설정이 필요합니다.");
+                throw new AnalyzeJobException(FailureCode.GITHUB_TOKEN_MISSING, "github.api.token 설정이 필요합니다.");
             }
 
             String branch = requestedBranch;
@@ -149,39 +168,44 @@ public class AnalyzeJobService {
             if (branch == null || branch.isBlank()) {
                 branch = "main";
             }
+            updateMetadata(jobId, branch, null, null);
             updateStage(jobId, AnalysisStage.VALIDATING, 100, null);
 
-            // 2. Collecting
-            updateStage(jobId, AnalysisStage.COLLECTING, 20, null);
+            updateStage(jobId, AnalysisStage.COLLECTING_FILES, 10, null);
             List<GitHubFileResponse> files = fileCollectionService
                     .collectTargetFiles(parsedRepo.owner(), parsedRepo.repo(), branch)
                     .collectList()
                     .block(GH_COLLECT_TIMEOUT);
             if (files == null) files = List.of();
-            updateStage(jobId, AnalysisStage.COLLECTING, 100, null);
+            updateMetadata(jobId, branch, files.size(), null);
+            updateStage(jobId, AnalysisStage.COLLECTING_FILES, 100, null);
 
-            // 3. Analyzing
-            updateStage(jobId, AnalysisStage.ANALYZING, 30, null);
+            updateStage(jobId, AnalysisStage.DETECTING_STACK, 20, null);
             List<DetectedStack> detectedStacks = stackDetector.detectStacks(Flux.fromIterable(files))
                     .block(Duration.ofSeconds(30));
+            if (detectedStacks == null) detectedStacks = List.of();
+            updateMetadata(jobId, branch, files.size(), detectedStacks.size());
+            updateStage(jobId, AnalysisStage.DETECTING_STACK, 100, null);
+
+            updateStage(jobId, AnalysisStage.PROFILING_CODE, 20, null);
             List<EndpointInfo> endpoints = codeProfiler.extractEndpoints(files);
             List<EntityInfo> entities = codeProfiler.extractEntities(files);
             
             AnalysisSummary summary = summarize(files, detectedStacks, endpoints, entities);
-            updateStage(jobId, AnalysisStage.ANALYZING, 100, null);
+            updateStage(jobId, AnalysisStage.PROFILING_CODE, 100, null);
 
-            // 4. Generating (LLM)
-            updateStage(jobId, AnalysisStage.GENERATING, 20, null);
+            updateStage(jobId, AnalysisStage.BUILDING_CONTEXT, 20, null);
             List<GitHubFileResponse> coreFiles = contextBuilder.selectCoreFiles(files);
             String context = contextBuilder.buildContext(detectedStacks, endpoints, entities, coreFiles);
+            updateStage(jobId, AnalysisStage.BUILDING_CONTEXT, 100, null);
             
-            String aiMarkdown = llmClient.generateReadme(context, userDescription)
-                    .block(Duration.ofMinutes(1));
+            updateStage(jobId, AnalysisStage.GENERATING_README, 20, null);
+            String fallbackMarkdown = buildResultMarkdown(parsedRepo, branch, summary).markdown();
+            String aiMarkdown = generateReadmeWithFallback(context, userDescription, fallbackMarkdown);
             
             AnalyzeResult result = new AnalyzeResult(aiMarkdown, new AnalyzeGraph(summary.nodes(), summary.edges()));
-            updateStage(jobId, AnalysisStage.GENERATING, 100, result);
+            updateStage(jobId, AnalysisStage.GENERATING_README, 100, result);
 
-            // 5. Finalizing
             jobs.computeIfPresent(jobId, (id, prev) -> {
                 JobState next = prev.done(result);
                 saveToDb(next);
@@ -192,17 +216,41 @@ public class AnalyzeJobService {
         } catch (Exception e) {
             log.error("Analyze job failed. jobId={}, reason={}", jobId, e.getMessage());
             jobs.computeIfPresent(jobId, (id, prev) -> {
-                JobState next = prev.failed(userFacingError(e));
+                JobState next = prev.failed(failureCode(e), userFacingError(e));
                 saveToDb(next);
                 return next;
             });
         }
     }
 
+    private String generateReadmeWithFallback(String context, String userDescription, String fallbackMarkdown) {
+        try {
+            String generated = llmClient.generateReadme(context, userDescription)
+                    .block(Duration.ofMinutes(1));
+            if (generated == null ||
+                    generated.isBlank() ||
+                    generated.contains("LLM 생성 중 오류가 발생했습니다") ||
+                    generated.contains("Gemini API Key가 설정되지 않았습니다")) {
+                return fallbackMarkdown;
+            }
+            return generated;
+        } catch (Exception e) {
+            log.warn("LLM README generation failed. fallback README will be used. reason={}", e.getMessage());
+            return fallbackMarkdown;
+        }
+    }
+
     private void updateStage(String jobId, AnalysisStage stage, int subProgress, AnalyzeResult result) {
-        // subProgress는 해당 단계 내에서의 진행률(0~100)
         jobs.computeIfPresent(jobId, (id, prev) -> {
             JobState next = prev.runningStage(stage, subProgress, result);
+            saveToDb(next);
+            return next;
+        });
+    }
+
+    private void updateMetadata(String jobId, String branch, Integer collectedFileCount, Integer detectedStackCount) {
+        jobs.computeIfPresent(jobId, (id, prev) -> {
+            JobState next = prev.withMetadata(branch, collectedFileCount, detectedStackCount);
             saveToDb(next);
             return next;
         });
@@ -223,11 +271,20 @@ public class AnalyzeJobService {
                 .status(state.status)
                 .stage(state.stage)
                 .stageProgress(state.stageProgress)
+                .errorCode(state.errorCode)
+                .owner(state.owner)
+                .repo(state.repo)
+                .branch(state.branch)
+                .collectedFileCount(state.collectedFileCount)
+                .detectedStackCount(state.detectedStackCount)
                 .markdown(state.result != null ? state.result.markdown() : null)
                 .graphJson(graphJson)
                 .error(state.error)
                 .build();
 
+        analyzeJobRepository.findById(state.jobId)
+                .map(AnalyzeJobEntity::getCreatedAt)
+                .ifPresent(entity::setCreatedAt);
         analyzeJobRepository.save(entity);
     }
 
@@ -291,12 +348,19 @@ public class AnalyzeJobService {
 
     private AnalyzeResult buildResultMarkdown(ParsedRepo repo, String branch, AnalysisSummary summary) {
         StringBuilder markdown = new StringBuilder();
-        markdown.append("# 기술 문서(백엔드 분석 결과)\n\n")
+        markdown.append("# ").append(repo.repo()).append("\n\n")
+                .append("> LLM 생성 실패 시 정적 분석 결과만으로 생성된 fallback README입니다.\n\n");
+
+        markdown.append("## 프로젝트 소개\n\n")
                 .append("- 저장소: `").append(repo.owner()).append("/").append(repo.repo()).append("`\n")
                 .append("- 브랜치: `").append(branch).append("`\n")
-                .append("- 수집 파일 수: ").append(summary.totalFiles()).append("개\n\n");
+                .append("- 분석 파일 수: ").append(summary.totalFiles()).append("개\n\n");
 
-        markdown.append("## 1. 기술 스택 (Detected Stacks)\n");
+        markdown.append("## 주요 기능\n\n")
+                .append("- GitHub 저장소 파일 구조를 기반으로 기술 스택, API 엔드포인트, DB 엔티티를 분석합니다.\n")
+                .append("- 분석 결과를 README 작성에 활용할 수 있는 구조화된 형태로 정리합니다.\n\n");
+
+        markdown.append("## 기술 스택\n\n");
         if (summary.detectedStacks() == null || summary.detectedStacks().isEmpty()) {
             markdown.append("- 식별된 기술 스택이 없습니다.\n");
         } else {
@@ -307,28 +371,56 @@ public class AnalyzeJobService {
         }
         markdown.append("\n");
 
-        markdown.append("## 2. API 엔드포인트 (Endpoints)\n");
+        markdown.append("## 실행 방법\n\n")
+                .append("- 실행 방법은 프로젝트 설정 파일을 기반으로 수동 확인이 필요합니다.\n\n");
+
+        markdown.append("## 환경 변수\n\n")
+                .append("- 자동 분석에서 확정 가능한 환경 변수 정보가 감지되지 않았습니다.\n\n");
+
+        markdown.append("## API 명세\n\n");
         if (summary.endpoints().isEmpty()) {
             markdown.append("- 식별된 API 엔드포인트가 없습니다.\n");
         } else {
+            markdown.append("| Method | URL | Controller | Handler | Request | Response |\n")
+                    .append("| --- | --- | --- | --- | --- | --- |\n");
             summary.endpoints().forEach(e -> 
-                markdown.append("- `").append(e.getMethod()).append("` ").append(e.getUrl()).append("\n")
+                markdown.append("| `").append(e.getMethod()).append("` | `").append(e.getUrl()).append("` | ")
+                        .append(nullToDash(e.getControllerName())).append(" | ")
+                        .append(nullToDash(e.getMethodName())).append(" | ")
+                        .append(nullToDash(e.getRequestDto())).append(" | ")
+                        .append(nullToDash(e.getResponseDto())).append(" |\n")
             );
         }
         markdown.append("\n");
 
-        markdown.append("## 3. 데이터베이스 엔티티 (Entities)\n");
+        markdown.append("## DB 구조\n\n");
         if (summary.entities().isEmpty()) {
             markdown.append("- 식별된 엔티티가 없습니다.\n");
         } else {
-            summary.entities().forEach(en -> 
-                markdown.append("- **").append(en.getName()).append("**: ")
-                        .append(String.join(", ", en.getFields())).append("\n")
-            );
+            summary.entities().forEach(en -> {
+                markdown.append("### ").append(en.getName()).append("\n\n");
+                if (en.getTableName() != null && !en.getTableName().isBlank()) {
+                    markdown.append("- Table: `").append(en.getTableName()).append("`\n\n");
+                }
+                markdown.append("| Field | Type | Column |\n")
+                        .append("| --- | --- | --- |\n");
+                if (en.getFieldDetails() == null || en.getFieldDetails().isEmpty()) {
+                    markdown.append("| - | - | - |\n");
+                } else {
+                    en.getFieldDetails().forEach(field ->
+                            markdown.append("| ").append(field.getName()).append(" | ")
+                                    .append(nullToDash(field.getType())).append(" | ")
+                                    .append(nullToDash(field.getColumnName())).append(" |\n")
+                    );
+                }
+                markdown.append("\n");
+            });
         }
-        markdown.append("\n");
 
-        markdown.append("## 4. 파일 유형 분포 (Top ").append(summary.topExtensions().size()).append(")\n");
+        markdown.append("## 아키텍처\n\n")
+                .append("- 정적 분석 그래프는 기술 스택, API 엔드포인트, 엔티티를 저장소 루트와 연결해 구성됩니다.\n\n");
+
+        markdown.append("## 파일 유형 분포\n\n");
         if (summary.topExtensions().isEmpty()) {
             markdown.append("- 분석 가능한 대상 파일이 없습니다.\n");
         } else {
@@ -337,11 +429,11 @@ public class AnalyzeJobService {
             }
         }
 
-        markdown.append("\n## 다음 단계\n")
-                .append("- LLM 생성 문서를 도메인 섹션(아키텍처/실행방법/API)으로 확장 (9-11주차 예정)\n")
-                .append("- 연결 그래프 노드/엣지 의미를 실제 코드 구조 기준으로 정교화\n");
-
         return new AnalyzeResult(markdown.toString(), new AnalyzeGraph(summary.nodes(), summary.edges()));
+    }
+
+    private static String nullToDash(String value) {
+        return value == null || value.isBlank() ? "-" : value;
     }
 
     private static String extensionOf(String path) {
@@ -397,11 +489,30 @@ public class AnalyzeJobService {
     }
 
     private static String userFacingError(Exception e) {
+        if (e instanceof AnalyzeJobException analyzeJobException) {
+            return analyzeJobException.getMessage();
+        }
         String message = e.getMessage();
         if (message == null || message.isBlank()) {
             return "분석 중 알 수 없는 오류가 발생했습니다.";
         }
         return message;
+    }
+
+    private static String failureCode(Exception e) {
+        if (e instanceof AnalyzeJobException analyzeJobException) {
+            return analyzeJobException.code().name();
+        }
+        if (e instanceof WebClientResponseException.NotFound) {
+            return FailureCode.REPOSITORY_NOT_FOUND.name();
+        }
+        if (e instanceof WebClientResponseException.TooManyRequests) {
+            return FailureCode.RATE_LIMITED.name();
+        }
+        if (e instanceof IllegalArgumentException) {
+            return FailureCode.INVALID_GITHUB_URL.name();
+        }
+        return FailureCode.UNKNOWN_ERROR.name();
     }
 
     @PreDestroy
@@ -410,6 +521,19 @@ public class AnalyzeJobService {
     }
 
     private record ParsedRepo(String owner, String repo) {}
+
+    private static class AnalyzeJobException extends RuntimeException {
+        private final FailureCode code;
+
+        AnalyzeJobException(FailureCode code, String message) {
+            super(message);
+            this.code = code;
+        }
+
+        FailureCode code() {
+            return code;
+        }
+    }
 
     private record AnalysisSummary(
             int totalFiles,
@@ -426,34 +550,126 @@ public class AnalyzeJobService {
         private final String jobId;
         private final AnalysisStage stage;
         private final int stageProgress;
+        private final String errorCode;
         private final String error;
         private final AnalyzeResult result;
+        private final String owner;
+        private final String repo;
+        private final String branch;
+        private final Integer collectedFileCount;
+        private final Integer detectedStackCount;
 
-        private JobState(String status, String jobId, AnalysisStage stage, int stageProgress, String error, AnalyzeResult result) {
+        private JobState(
+                String status,
+                String jobId,
+                AnalysisStage stage,
+                int stageProgress,
+                String errorCode,
+                String error,
+                AnalyzeResult result,
+                String owner,
+                String repo,
+                String branch,
+                Integer collectedFileCount,
+                Integer detectedStackCount
+        ) {
             this.status = status;
             this.jobId = jobId;
             this.stage = stage;
             this.stageProgress = stageProgress;
+            this.errorCode = errorCode;
             this.error = error;
             this.result = result;
+            this.owner = owner;
+            this.repo = repo;
+            this.branch = branch;
+            this.collectedFileCount = collectedFileCount;
+            this.detectedStackCount = detectedStackCount;
         }
 
-        static JobState running(String jobId, AnalysisStage stage) {
-            return new JobState(STATUS_RUNNING, jobId, stage, 0, null, null);
+        static JobState running(String jobId, AnalysisStage stage, ParsedRepo parsedRepo, String branch) {
+            return new JobState(
+                    STATUS_RUNNING,
+                    jobId,
+                    stage,
+                    stage.progressAt(0),
+                    null,
+                    null,
+                    null,
+                    parsedRepo.owner(),
+                    parsedRepo.repo(),
+                    branch,
+                    null,
+                    null
+            );
         }
 
         JobState runningStage(AnalysisStage nextStage, int subProgress, AnalyzeResult nextResult) {
-            // subProgress (0~100)를 기반으로 전체 진행률 계산 (간소화)
-            int totalProgress = nextStage.getDefaultProgress();
-            return new JobState(STATUS_RUNNING, this.jobId, nextStage, totalProgress, null, nextResult);
+            return new JobState(
+                    STATUS_RUNNING,
+                    this.jobId,
+                    nextStage,
+                    nextStage.progressAt(subProgress),
+                    null,
+                    null,
+                    nextResult,
+                    this.owner,
+                    this.repo,
+                    this.branch,
+                    this.collectedFileCount,
+                    this.detectedStackCount
+            );
+        }
+
+        JobState withMetadata(String nextBranch, Integer nextCollectedFileCount, Integer nextDetectedStackCount) {
+            return new JobState(
+                    this.status,
+                    this.jobId,
+                    this.stage,
+                    this.stageProgress,
+                    this.errorCode,
+                    this.error,
+                    this.result,
+                    this.owner,
+                    this.repo,
+                    nextBranch != null ? nextBranch : this.branch,
+                    nextCollectedFileCount != null ? nextCollectedFileCount : this.collectedFileCount,
+                    nextDetectedStackCount != null ? nextDetectedStackCount : this.detectedStackCount
+            );
         }
 
         JobState done(AnalyzeResult finalResult) {
-            return new JobState(STATUS_DONE, this.jobId, AnalysisStage.COMPLETED, 100, null, finalResult);
+            return new JobState(
+                    STATUS_DONE,
+                    this.jobId,
+                    AnalysisStage.COMPLETED,
+                    100,
+                    null,
+                    null,
+                    finalResult,
+                    this.owner,
+                    this.repo,
+                    this.branch,
+                    this.collectedFileCount,
+                    this.detectedStackCount
+            );
         }
 
-        JobState failed(String failureError) {
-            return new JobState(STATUS_FAILED, this.jobId, AnalysisStage.FAILED, 0, failureError, null);
+        JobState failed(String failureCode, String failureError) {
+            return new JobState(
+                    STATUS_FAILED,
+                    this.jobId,
+                    AnalysisStage.FAILED,
+                    0,
+                    failureCode,
+                    failureError,
+                    null,
+                    this.owner,
+                    this.repo,
+                    this.branch,
+                    this.collectedFileCount,
+                    this.detectedStackCount
+            );
         }
     }
 }

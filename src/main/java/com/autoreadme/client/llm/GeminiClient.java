@@ -54,21 +54,28 @@ public class GeminiClient implements LLMClient {
 
     private String buildPrompt(String context, String userDescription) {
         StringBuilder sb = new StringBuilder();
-        sb.append("You are an expert software engineer. Based on the following technical context of a project, generate a high-quality, professional README.md file in Korean.\n");
+        sb.append("You are an expert software engineer. Generate a polished README.md in Korean from the structured project context.\n");
+        sb.append("Return Markdown only. Do not include explanations outside the README.\n");
         
         if (userDescription != null && !userDescription.isBlank()) {
             sb.append("\n### User-provided Project Description:\n")
               .append(userDescription).append("\n");
         }
 
-        sb.append("\nThe README should include:\n")
-          .append("- Project name and brief description\n")
-          .append("- Tech stacks used\n")
-          .append("- Key features\n")
-          .append("- API Endpoints (if available)\n")
-          .append("- Database structure (if available)\n")
-          .append("Use Markdown format and ensure it's well-structured.\n\n")
-          .append("### Technical Context:\n")
+        sb.append("\nRequired README sections:\n")
+          .append("1. 프로젝트 소개\n")
+          .append("2. 주요 기능\n")
+          .append("3. 기술 스택\n")
+          .append("4. 실행 방법\n")
+          .append("5. 환경 변수\n")
+          .append("6. API 명세\n")
+          .append("7. DB 구조\n")
+          .append("8. 아키텍처\n")
+          .append("\nRules:\n")
+          .append("- Use only facts supported by the context.\n")
+          .append("- If a section has no evidence, write a short note that it was not detected.\n")
+          .append("- Prefer tables for API endpoints and database fields.\n\n")
+          .append("### Structured Technical Context:\n")
           .append(context);
         
         return sb.toString();
