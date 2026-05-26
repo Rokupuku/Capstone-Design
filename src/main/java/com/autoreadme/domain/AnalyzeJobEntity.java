@@ -23,6 +23,18 @@ public class AnalyzeJobEntity {
     private AnalysisStage stage;
     
     private int stageProgress;
+
+    private String errorCode;
+
+    private String owner;
+
+    private String repo;
+
+    private String branch;
+
+    private Integer collectedFileCount;
+
+    private Integer detectedStackCount;
     
     @Column(columnDefinition = "TEXT")
     private String markdown;

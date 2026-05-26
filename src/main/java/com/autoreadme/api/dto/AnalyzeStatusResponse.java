@@ -5,6 +5,7 @@ public record AnalyzeStatusResponse(
         String jobId,
         String stage,
         int stageProgress,
+        String errorCode,
         String error,
         AnalyzeResult result
 ) {}

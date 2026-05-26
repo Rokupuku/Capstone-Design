@@ -55,6 +55,37 @@ class CodeProfilerTest {
     }
 
     @Test
+    void testRequestMappingMethodAndEndpointMetadataExtraction() {
+        String content = "@RestController\n" +
+                         "@RequestMapping(path = \"/api/members\")\n" +
+                         "public class MemberController {\n" +
+                         "    @RequestMapping(value = \"/{id}\", method = RequestMethod.GET)\n" +
+                         "    public ResponseEntity<MemberResponse> find(@PathVariable Long id) { return null; }\n" +
+                         "    @PostMapping(\"/signup\")\n" +
+                         "    public MemberResponse signup(@RequestBody MemberCreateRequest request) { return null; }\n" +
+                         "}";
+        GitHubFileResponse file = new GitHubFileResponse("src/main/java/com/test/MemberController.java", content);
+
+        List<EndpointInfo> endpoints = codeProfiler.extractEndpoints(List.of(file));
+
+        assertThat(endpoints).hasSize(2);
+        assertThat(endpoints).anySatisfy(endpoint -> {
+            assertThat(endpoint.getMethod()).isEqualTo("GET");
+            assertThat(endpoint.getUrl()).isEqualTo("/api/members/{id}");
+            assertThat(endpoint.getControllerName()).isEqualTo("MemberController");
+            assertThat(endpoint.getMethodName()).isEqualTo("find");
+            assertThat(endpoint.getFilePath()).isEqualTo("src/main/java/com/test/MemberController.java");
+            assertThat(endpoint.getResponseDto()).isEqualTo("MemberResponse");
+        });
+        assertThat(endpoints).anySatisfy(endpoint -> {
+            assertThat(endpoint.getMethod()).isEqualTo("POST");
+            assertThat(endpoint.getUrl()).isEqualTo("/api/members/signup");
+            assertThat(endpoint.getRequestDto()).isEqualTo("MemberCreateRequest");
+            assertThat(endpoint.getResponseDto()).isEqualTo("MemberResponse");
+        });
+    }
+
+    @Test
     void testEntityExtraction() {
         String content = "@Entity\n" +
                          "public class User {\n" +
@@ -69,5 +100,36 @@ class CodeProfilerTest {
         assertThat(entities).hasSize(1);
         assertThat(entities.get(0).getName()).isEqualTo("User");
         assertThat(entities.get(0).getFields()).contains("id", "name");
+    }
+
+    @Test
+    void testEntityFieldTypeTableAndRelationExtraction() {
+        String content = "@Entity\n" +
+                         "@Table(name = \"orders\")\n" +
+                         "public class Order {\n" +
+                         "    @Id\n" +
+                         "    private Long id;\n" +
+                         "    @Column(name = \"order_name\")\n" +
+                         "    private String name;\n" +
+                         "    @ManyToOne\n" +
+                         "    private Member member;\n" +
+                         "}";
+        GitHubFileResponse file = new GitHubFileResponse("src/main/java/com/test/Order.java", content);
+
+        List<EntityInfo> entities = codeProfiler.extractEntities(List.of(file));
+
+        assertThat(entities).hasSize(1);
+        EntityInfo entity = entities.get(0);
+        assertThat(entity.getName()).isEqualTo("Order");
+        assertThat(entity.getTableName()).isEqualTo("orders");
+        assertThat(entity.getFilePath()).isEqualTo("src/main/java/com/test/Order.java");
+        assertThat(entity.getFieldDetails()).extracting("name", "type", "columnName")
+                .contains(
+                        org.assertj.core.groups.Tuple.tuple("id", "Long", null),
+                        org.assertj.core.groups.Tuple.tuple("name", "String", "order_name"),
+                        org.assertj.core.groups.Tuple.tuple("member", "Member", null)
+                );
+        assertThat(entity.getRelationships()).extracting("fieldName", "relationType", "targetEntity")
+                .containsExactly(org.assertj.core.groups.Tuple.tuple("member", "ManyToOne", "Member"));
     }
 }
