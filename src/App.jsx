@@ -75,9 +75,11 @@ function convertToMermaid(graph) {
 
 const STAGES = [
   { stage: 'VALIDATING', label: '입력 검증' },
-  { stage: 'COLLECTING', label: 'GitHub 파일 수집' },
-  { stage: 'ANALYZING', label: '정적 분석' },
-  { stage: 'GENERATING', label: 'LLM 문서 생성' },
+  { stage: 'COLLECTING_FILES', label: 'GitHub 파일 수집' },
+  { stage: 'DETECTING_STACK', label: '기술 스택 분석' },
+  { stage: 'PROFILING_CODE', label: '코드 구조 분석' },
+  { stage: 'BUILDING_CONTEXT', label: '컨텍스트 구성' },
+  { stage: 'GENERATING_README', label: 'README 생성' },
   { stage: 'COMPLETED', label: '완료' },
 ]
 
@@ -221,9 +223,11 @@ export default function App() {
     const jobId = `mock_${Math.random().toString(16).slice(2, 10)}`
     const stagePlan = [
       { stage: 'VALIDATING', ms: 800 },
-      { stage: 'COLLECTING', ms: 1600 },
-      { stage: 'ANALYZING', ms: 2000 },
-      { stage: 'GENERATING', ms: 2600 },
+      { stage: 'COLLECTING_FILES', ms: 1600 },
+      { stage: 'DETECTING_STACK', ms: 1400 },
+      { stage: 'PROFILING_CODE', ms: 1600 },
+      { stage: 'BUILDING_CONTEXT', ms: 1000 },
+      { stage: 'GENERATING_README', ms: 2200 },
       { stage: 'COMPLETED', ms: 900 },
     ]
 
