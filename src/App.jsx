@@ -81,6 +81,18 @@ const STAGES = [
   { stage: 'COMPLETED', label: '완료' },
 ]
 
+const README_TEMPLATES = [
+  { id: 'standard', label: '표준' },
+  { id: 'minimal', label: '간단' },
+  { id: 'detailed', label: '상세' },
+]
+
+const README_LANGUAGES = [
+  { id: 'ko', label: '한국어' },
+  { id: 'en', label: 'English' },
+  { id: 'ja', label: '日本語' },
+]
+
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080').replace(/\/$/, '')
 const MOCK_FLAG = import.meta.env.VITE_USE_MOCK_API
 const USE_MOCK_API = MOCK_FLAG === 'true'
@@ -132,6 +144,8 @@ function isProbablyGitHubRepoUrl(value) {
 export default function App() {
   const [githubUrl, setGithubUrl] = useState('')
   const [projectDescription, setProjectDescription] = useState('')
+  const [readmeTemplate, setReadmeTemplate] = useState('standard')
+  const [readmeLanguage, setReadmeLanguage] = useState('ko')
   const [readmeText, setReadmeText] = useState('')
   const domPurifyRef = useRef(null)
   const [colorScheme, setColorScheme] = useState(readStoredColorScheme)
@@ -216,8 +230,10 @@ export default function App() {
     }, POLLING_INTERVAL_MS)
   }
 
-  function startMockJob(trimmedUrl) {
+  function startMockJob(trimmedUrl, templateId, languageId) {
     clearPolling()
+    const templateLabel = README_TEMPLATES.find((t) => t.id === templateId)?.label ?? templateId
+    const languageLabel = README_LANGUAGES.find((l) => l.id === languageId)?.label ?? languageId
     const jobId = `mock_${Math.random().toString(16).slice(2, 10)}`
     const stagePlan = [
       { stage: 'VALIDATING', ms: 800 },
@@ -256,7 +272,7 @@ export default function App() {
             stage: 'COMPLETED',
             stageProgress: 100,
             result: {
-              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- 실행 모드: Mock (백엔드 미연결)\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- 실 API 연동 시 \`VITE_USE_MOCK_API=false\` 설정`,
+              markdown: `# 기술 문서(프론트 목업)\n\n- 입력 URL: ${trimmedUrl}\n- README 템플릿: ${templateLabel} (\`${templateId}\`)\n- 문서 언어: ${languageLabel} (\`${languageId}\`)\n- 실행 모드: Mock\n\n## 분석 요약\n- 단계 진행 UI 점검 완료\n- README 편집/복사/다운로드 동작 가능\n\n## 다음 단계\n- 실 API 연동 시 \`VITE_USE_MOCK_API=false\` 설정`,
               graph: { nodes: [], edges: [] },
             },
           }))
@@ -281,7 +297,7 @@ export default function App() {
     }
 
     if (USE_MOCK_API) {
-      startMockJob(trimmed)
+      startMockJob(trimmed, readmeTemplate, readmeLanguage)
       return
     }
 
@@ -302,6 +318,8 @@ export default function App() {
         body: JSON.stringify({
           githubUrl: trimmed,
           projectDescription: projectDescription.trim() || undefined,
+          template: readmeTemplate,
+          language: readmeLanguage,
         }),
       })
 
@@ -407,38 +425,78 @@ export default function App() {
               프로젝트 코드 분석을 통해 고품질의 README.md를 자동으로 만들어 드립니다.
             </p>
 
-            <div className="formRow">
-              <label className="label">
-                GitHub URL
+            <div className="heroFormStack">
+              <div className="heroFieldGroup">
+                <label className="heroFieldLabel" htmlFor="github-repo-url">
+                  GitHub URL
+                </label>
                 <input
-                  className="input"
+                  id="github-repo-url"
+                  className="input heroField"
                   value={githubUrl}
                   onChange={(e) => setGithubUrl(e.target.value)}
                   placeholder="https://github.com/{owner}/{repo}"
                   spellCheck={false}
                   autoComplete="off"
                 />
-              </label>
-            </div>
+              </div>
 
-            <div className="formRow">
-              <label className="label">
-                프로젝트 설명 (선택)
+              <div className="heroFieldGroup">
+                <label className="heroFieldLabel" htmlFor="project-description">
+                  프로젝트 설명 (선택)
+                </label>
                 <textarea
-                  className="input textarea"
-                  style={{ minHeight: '80px', paddingTop: '8px' }}
+                  id="project-description"
+                  className="input heroField projectDescriptionTextarea"
                   value={projectDescription}
                   onChange={(e) => setProjectDescription(e.target.value)}
                   placeholder="이 저장소에 대한 핵심 설명이나 특징을 적어주세요. README 생성에 활용됩니다."
                   spellCheck={false}
+                  rows={5}
+                  cols={1}
                 />
-              </label>
-            </div>
+              </div>
 
-            <div className="formRow">
-              <button className="btn btnPrimary" style={{ width: '100%' }} onClick={startAnalyzeJob} disabled={!canStart} type="button">
-                분석 시작
-              </button>
+              <div className="heroOptsMinimal" role="group" aria-label="README 생성 옵션">
+                <div className="heroOptLine">
+                  <span className="heroOptLineLabel">템플릿</span>
+                  <div className="heroSeg" role="group" aria-label="README 템플릿">
+                    {README_TEMPLATES.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        className={`heroSegBtn ${readmeTemplate === t.id ? 'heroSegBtnOn' : ''}`}
+                        onClick={() => setReadmeTemplate(t.id)}
+                        aria-pressed={readmeTemplate === t.id}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="heroOptLine">
+                  <span className="heroOptLineLabel">언어</span>
+                  <div className="heroSeg" role="group" aria-label="문서 언어">
+                    {README_LANGUAGES.map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        className={`heroSegBtn ${readmeLanguage === l.id ? 'heroSegBtnOn' : ''}`}
+                        onClick={() => setReadmeLanguage(l.id)}
+                        aria-pressed={readmeLanguage === l.id}
+                      >
+                        {l.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="heroFormActions">
+                <button className="btn btnPrimary heroSubmitBtn" onClick={startAnalyzeJob} disabled={!canStart} type="button">
+                  분석 시작
+                </button>
+              </div>
             </div>
           </section>
         ) : null}

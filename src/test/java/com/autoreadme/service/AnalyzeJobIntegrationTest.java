@@ -18,6 +18,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 
 @SpringBootTest
@@ -40,7 +41,7 @@ class AnalyzeJobIntegrationTest {
     void fullPipelineTest() {
         // Given
         String githubUrl = "https://github.com/test/repo";
-        AnalyzeStartRequest request = new AnalyzeStartRequest(githubUrl, "main", "Test project");
+        AnalyzeStartRequest request = new AnalyzeStartRequest(githubUrl, "main", "Test project", "standard", "ko");
 
         Mockito.when(gitHubClient.hasGitHubToken()).thenReturn(true);
         Mockito.when(gitHubClient.getDefaultBranch(anyString(), anyString())).thenReturn(Mono.just("main"));
@@ -52,7 +53,7 @@ class AnalyzeJobIntegrationTest {
         Mockito.when(fileCollectionService.collectTargetFiles(anyString(), anyString(), anyString()))
                 .thenReturn(Flux.fromIterable(mockFiles));
         
-        Mockito.when(llmClient.generateReadme(anyString(), anyString()))
+        Mockito.when(llmClient.generateReadme(anyString(), anyString(), any(), any()))
                 .thenReturn(Mono.just("# AI Generated README\n\n- Spring Boot\n- /api/hello"));
 
         // When

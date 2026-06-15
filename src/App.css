@@ -81,6 +81,8 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
+  align-items: stretch;
 }
 
 .card {
@@ -115,14 +117,128 @@
   line-height: 1.55;
 }
 
+/* 히어로: URL·설명·버튼이 같은 가로 폭(반응형)을 공유 */
+.heroFormStack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+  align-items: stretch;
+}
+
+.heroFieldGroup {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  row-gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.heroFieldLabel {
+  min-width: 0;
+  color: var(--text-h);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.heroField {
+  grid-column: 1;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.heroFormActions {
+  width: 100%;
+  min-width: 0;
+}
+
+.heroSubmitBtn {
+  width: 100%;
+}
+
+/* README 옵션: 네이티브 셀렉트 대신 얇은 구분선 + 텍스트 세그먼트 */
+.heroOptsMinimal {
+  width: 100%;
+  min-width: 0;
+  margin-top: 2px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.heroOptLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
+}
+
+.heroOptLineLabel {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.heroSeg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.heroSegBtn {
+  margin: 0;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.heroSegBtn:hover {
+  color: var(--text-h);
+}
+
+.heroSegBtnOn {
+  color: var(--text-h);
+  background: var(--surface-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.heroSegBtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--input-focus-ring);
+}
+
 .formRow {
   display: flex;
   gap: 12px;
   align-items: flex-end;
+  width: 100%;
+  min-width: 0;
 }
 
 .label {
   flex: 1;
+  min-width: 0;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -132,6 +248,9 @@
 }
 
 .input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   height: 44px;
   border-radius: 10px;
   border: 1px solid var(--border-strong);
@@ -150,6 +269,18 @@
 .input:focus-visible {
   border-color: var(--input-focus-border);
   box-shadow: 0 0 0 3px var(--input-focus-ring);
+}
+
+/* 프로젝트 설명: 세로만 고정, 가로는 .heroField와 동일 */
+.input.heroField.projectDescriptionTextarea {
+  display: block;
+  height: 128px;
+  min-height: 128px;
+  max-height: 128px;
+  resize: none;
+  overflow-y: auto;
+  padding: 10px 14px;
+  line-height: 1.45;
 }
 
 .btn {
@@ -554,6 +685,7 @@
   .formRow {
     flex-direction: column;
     align-items: stretch;
+    align-self: stretch;
   }
 
   .stageRight {

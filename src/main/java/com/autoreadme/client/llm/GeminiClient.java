@@ -24,7 +24,7 @@ public class GeminiClient implements LLMClient {
     private static final String GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
 
     @Override
-    public Mono<String> generateReadme(String context, String userDescription) {
+    public Mono<String> generateReadme(String context, String userDescription, String template, String language) {
         if (apiKey == null || apiKey.isBlank()) {
             return Mono.just("Gemini API Key가 설정되지 않았습니다. 기본 템플릿 결과를 반환합니다.\n\n" + context);
         }
@@ -34,7 +34,7 @@ public class GeminiClient implements LLMClient {
         Map<String, Object> requestBody = Map.of(
             "contents", List.of(
                 Map.of("parts", List.of(
-                    Map.of("text", buildPrompt(context, userDescription))
+                    Map.of("text", buildPrompt(context, userDescription, template, language))
                 ))
             )
         );
@@ -52,25 +52,54 @@ public class GeminiClient implements LLMClient {
                 });
     }
 
-    private String buildPrompt(String context, String userDescription) {
+    private String buildPrompt(String context, String userDescription, String template, String language) {
+        String langRule = switch (language == null ? "ko" : language) {
+            case "en" -> "Write the entire README.md content in English only.";
+            case "ja" -> "Write the entire README.md content in Japanese (日本語) only.";
+            default -> "Write the entire README.md content in Korean (한국어) only.";
+        };
+
+        String structure = switch (template == null ? "standard" : template) {
+            case "minimal" -> """
+                    Use a concise README structure:
+                    - # Project title
+                    - One short overview paragraph
+                    - Tech stack (bullet list)
+                    - Quick start: minimal install and run commands only
+                    """;
+            case "detailed" -> """
+                    Use a comprehensive README structure:
+                    - Title, overview, features
+                    - Tech stack and prerequisites
+                    - Installation, configuration, usage/examples
+                    - API summary if endpoints exist; data model if entities exist
+                    - Optional: project tree, contributing, security reporting, license placeholder
+                    """;
+            default -> """
+                    Use a standard professional README structure:
+                    - Project name and brief description
+                    - Tech stacks used
+                    - Key features
+                    - Getting started (prerequisites, install, run)
+                    - API endpoints if available
+                    - Database/entities if available
+                    """;
+        };
+
         StringBuilder sb = new StringBuilder();
-        sb.append("You are an expert software engineer. Based on the following technical context of a project, generate a high-quality, professional README.md file in Korean.\n");
-        
+        sb.append("You are an expert software engineer. Based on the technical context below, generate a high-quality README.md.\n");
+        sb.append("\n### Language requirement\n").append(langRule).append("\n");
+        sb.append("\n### Template / structure requirement\n").append(structure).append("\n");
+
         if (userDescription != null && !userDescription.isBlank()) {
-            sb.append("\n### User-provided Project Description:\n")
-              .append(userDescription).append("\n");
+            sb.append("\n### User-provided project description\n")
+                    .append(userDescription)
+                    .append("\n");
         }
 
-        sb.append("\nThe README should include:\n")
-          .append("- Project name and brief description\n")
-          .append("- Tech stacks used\n")
-          .append("- Key features\n")
-          .append("- API Endpoints (if available)\n")
-          .append("- Database structure (if available)\n")
-          .append("Use Markdown format and ensure it's well-structured.\n\n")
-          .append("### Technical Context:\n")
-          .append(context);
-        
+        sb.append("\nUse Markdown (GFM-friendly). Do not wrap the answer in a code fence unless showing commands.\n\n");
+        sb.append("### Technical context\n").append(context);
+
         return sb.toString();
     }
 

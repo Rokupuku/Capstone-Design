@@ -87,7 +87,14 @@ public class AnalyzeJobService {
         jobs.put(jobId, state);
         saveToDb(state);
 
-        executor.submit(() -> runJob(jobId, parsedRepo, normalizeBranch(request.branch()), request.projectDescription()));
+        executor.submit(() -> runJob(
+                jobId,
+                parsedRepo,
+                normalizeBranch(request.branch()),
+                request.projectDescription(),
+                normalizeTemplate(request.template()),
+                normalizeLanguage(request.language())
+        ));
         return jobId;
     }
 
@@ -133,7 +140,8 @@ public class AnalyzeJobService {
         );
     }
 
-    private void runJob(String jobId, ParsedRepo parsedRepo, String requestedBranch, String userDescription) {
+    private void runJob(String jobId, ParsedRepo parsedRepo, String requestedBranch, String userDescription,
+                        String template, String language) {
         try {
             // 1. Validating
             updateStage(jobId, AnalysisStage.VALIDATING, 50, null);
@@ -175,7 +183,7 @@ public class AnalyzeJobService {
             List<GitHubFileResponse> coreFiles = contextBuilder.selectCoreFiles(files);
             String context = contextBuilder.buildContext(detectedStacks, endpoints, entities, coreFiles);
             
-            String aiMarkdown = llmClient.generateReadme(context, userDescription)
+            String aiMarkdown = llmClient.generateReadme(context, userDescription, template, language)
                     .block(Duration.ofMinutes(1));
             
             AnalyzeResult result = new AnalyzeResult(aiMarkdown, new AnalyzeGraph(summary.nodes(), summary.edges()));
@@ -357,6 +365,28 @@ public class AnalyzeJobService {
     private static String normalizeBranch(String branch) {
         if (branch == null || branch.isBlank()) return null;
         return branch.trim();
+    }
+
+    private static String normalizeTemplate(String template) {
+        if (template == null || template.isBlank()) {
+            return "standard";
+        }
+        String t = template.trim().toLowerCase();
+        return switch (t) {
+            case "minimal", "detailed", "standard" -> t;
+            default -> "standard";
+        };
+    }
+
+    private static String normalizeLanguage(String language) {
+        if (language == null || language.isBlank()) {
+            return "ko";
+        }
+        String lang = language.trim().toLowerCase();
+        return switch (lang) {
+            case "en", "ja", "ko" -> lang;
+            default -> "ko";
+        };
     }
 
     private static ParsedRepo parseGithubRepoUrl(String rawUrl) {

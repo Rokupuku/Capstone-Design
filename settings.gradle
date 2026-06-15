@@ -1,1 +1,13 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+}
+
+// JDK 23이 맥에 없어도, 첫 빌드 시 Foojay API로 툴체인 JDK를 받아옵니다 (네트워크 필요).
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 rootProject.name = 'autoreadme'
